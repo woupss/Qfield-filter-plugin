@@ -72,12 +72,20 @@ Item {
     property string pendingFormExpr: ""
     property var internalListView: null
     property bool wasListVisible: true
+    property var pendingDriveMeLayer: null
 
     // 1. INSTANCIATION DES PLUGINS ENFANTS
     // -----------------------------------------------------------
     
     DriveMe {
         id: drivemeTool
+    }
+
+    CoordinateTransformer {
+        id: gpsMapTransformer
+        sourceCrs: CoordinateReferenceSystemUtils.wgs84Crs()
+        destinationCrs: mapCanvas.mapSettings.destinationCrs
+        transformContext: qgisProject.transformContext
     }
 
 
@@ -476,7 +484,70 @@ Item {
     }
 
     Timer { id: searchDelayTimer; interval: 500; repeat: false; onTriggered: performDynamicSearch() }
-    Timer { id: zoomTimer; interval: 200; repeat: false; onTriggered: performZoom() }
+
+    Timer {
+        id: zoomTimer
+        interval: 200
+        repeat: false
+        onTriggered: {
+            performZoom()
+            if (filterToolRoot.pendingDriveMeLayer !== null)
+                recenterTimer.restart()
+        }
+    }
+
+    Timer {
+        id: recenterTimer
+        interval: 400
+        repeat: false
+        onTriggered: {
+            try {
+                let gpsPt = drivemeTool.getCurrentGpsPosition()
+                if (gpsPt) {
+                    let gpsGeom = GeometryUtils.createGeometryFromWkt("POINT(" + gpsPt.x + " " + gpsPt.y + ")")
+                    if (gpsGeom) {
+                        gpsMapTransformer.sourcePosition = GeometryUtils.centroid(gpsGeom)
+                        let proj = gpsMapTransformer.projectedPosition
+                        if (proj && (proj.x !== 0 || proj.y !== 0)) {
+                            // Étendue actuelle = bounding box des entités filtrées (après performZoom)
+                            let featExt = mapCanvas.mapSettings.extent
+                            // Distance max entre le GPS et chaque bord de l'étendue des entités
+                            let dx = Math.max(Math.abs(proj.x - featExt.xMinimum), Math.abs(proj.x - featExt.xMaximum))
+                            let dy = Math.max(Math.abs(proj.y - featExt.yMinimum), Math.abs(proj.y - featExt.yMaximum))
+                            // Marge 10%
+                            dx = dx * 1.1
+                            dy = dy * 1.1
+                            // Centrer sur GPS avec rayon suffisant pour inclure toutes les entités
+                            let screenRatio = featExt.width / (featExt.height > 0 ? featExt.height : 1)
+                            if (dx / dy > screenRatio) {
+                                dy = dx / screenRatio
+                            } else {
+                                dx = dy * screenRatio
+                            }
+                            featExt.xMinimum = proj.x - dx
+                            featExt.xMaximum = proj.x + dx
+                            featExt.yMinimum = proj.y - dy
+                            featExt.yMaximum = proj.y + dy
+                            mapCanvas.mapSettings.setExtent(featExt, true)
+                        }
+                    }
+                }
+            } catch(e) {}
+            startDriveTimer.restart()
+        }
+      }
+
+    Timer {
+        id: startDriveTimer
+        interval: 300
+        repeat: false
+        onTriggered: {
+            if (filterToolRoot.pendingDriveMeLayer !== null) {
+                drivemeTool.startWithLayer(filterToolRoot.pendingDriveMeLayer)
+                filterToolRoot.pendingDriveMeLayer = null
+            }
+        }
+    }
 
     Timer {
         id: openListTimer; interval: 250; repeat: false
@@ -1044,7 +1115,11 @@ Item {
                     id: filterAndDriveButton; text: tr("Filter & Drive me"); enabled: false; Layout.fillWidth: true; Layout.topMargin: -2
                     background: Rectangle { radius: 10; color: enabled ? "#80cc28" : "#e0e0e0" }
                     contentItem: Text { text: parent.text; color: enabled ? "white" : "#666666"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                    onClicked: { applyFilter(true, true); drivemeTool.startWithLayer(selectedLayer); searchDialog.close() }
+                    onClicked: {
+                        filterToolRoot.pendingDriveMeLayer = selectedLayer
+                        applyFilter(true, true)
+                        searchDialog.close()
+                    }
                 }
             }
         }

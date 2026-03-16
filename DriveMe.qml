@@ -321,8 +321,11 @@ function getHudText() {
     // Appelé par FilterTool via iface.findItemByObjectName("driveMe")
     // Lance directement la navigation sur la couche filtrée, sans dialogue ni bouton
     function startWithLayer(layer) {
+        iface.logMessage("[DM] startWithLayer appelé — layer=" + (layer ? layer.name : "null"), Qgis.Info)
         if (layer) {
             startNavigationProcess(layer)
+        } else {
+            iface.logMessage("[DM] startWithLayer : layer null — abandon", Qgis.Warning)
         }
     }
 
@@ -357,11 +360,13 @@ function getHudText() {
 
     function startNavigationProcess(layer) {
         try {
+            iface.logMessage("[DM] startNavigationProcess — layer=" + layer.name, Qgis.Info)
             chainWalkThreshold = 50
 
             // Vérification sélection préexistante via selectedFeatures() (API QField confirmée)
             let preSelected = layer.selectedFeatures()
             let hasPreSelection = preSelected && preSelected.length > 0
+            iface.logMessage("[DM] preSelected.length=" + (preSelected ? preSelected.length : 0) + " hasPreSelection=" + hasPreSelection, Qgis.Info)
             let feats = []
 
             if (hasPreSelection) {
@@ -402,7 +407,7 @@ function getHudText() {
             }
 
         } catch(e) {
-          //  iface.logMessage("Erreur startNav: " + e.toString(), Qgis.Critical)
+            iface.logMessage("[DM] startNavigationProcess EXCEPTION: " + e.toString(), Qgis.Critical)
         }
     }
 
@@ -591,14 +596,17 @@ function getHudText() {
 
     // --- DÉMARRAGE NAVIGATION : commun points/lignes et polygones ---
     function proceedWithNavigation(rawPoints) {
-        if (rawPoints.length < 1) { showHudMessage(tr("Aucun point trouvé")); return }
+        iface.logMessage("[DM] proceedWithNavigation — rawPoints.length=" + rawPoints.length, Qgis.Info)
+        if (rawPoints.length < 1) { showHudMessage(tr("Aucun point trouvé")); iface.logMessage("[DM] Aucun point — abandon", Qgis.Warning); return }
 
         unvisitedPoints = rawPoints
         totalPointsCount = rawPoints.length
         
         // Premier tri
         let startPos = getCurrentGpsPosition()
+        iface.logMessage("[DM] GPS=" + (startPos ? (startPos.x + "," + startPos.y) : "null"), Qgis.Info)
         if (!startPos) startPos = getMapCenter() 
+        iface.logMessage("[DM] startPos final=" + (startPos ? (startPos.x + "," + startPos.y) : "null"), Qgis.Info)
         if (!startPos) startPos = rawPoints[0]
         
         currentTarget = getClosestPoint(startPos, unvisitedPoints).point
@@ -612,7 +620,7 @@ function getHudText() {
             optimizeEntireTour(startPos)
         }
         
-      //  iface.logMessage("Nav démarrée.", Qgis.Info)
+     //   iface.logMessage("Nav démarrée.", Qgis.Info)
         updateNavigationLoop()
     }
 
@@ -690,11 +698,19 @@ function getHudText() {
     function updateNavigationLoop() {
         if (!isNavigating) return
 
+        // myPos = position GPS réelle du conducteur (physique)
         let myPos = getCurrentGpsPosition()
-        if (!myPos) myPos = getMapCenter() 
+        if (!myPos) myPos = getCrosshairPosition()
         if (!myPos) return
 
+        // routePos = crosshair si déplacé >20m du GPS, sinon GPS
+        // Utilisé pour tout ce qui concerne le routage, la validation et les tracés
+        let crosshairPos = getCrosshairPosition()
+        let routePos = (crosshairPos && getDistMeters(myPos, crosshairPos) > 20) ? crosshairPos : myPos
+
+
         // --- ENREGISTREMENT DU TRAJET PARCOURU (anti-demi-tour) ---
+        // Utilise myPos (GPS réel) : on enregistre le trajet physique, pas la position du crosshair
         if (navState === "DRIVING") {
             let lastTraveled = traveledCoords.length > 0 ? traveledCoords[traveledCoords.length - 1] : null
             if (!lastTraveled || getDistMeters(myPos, lastTraveled) > 15) {
@@ -702,12 +718,13 @@ function getHudText() {
             }
         }
 
-        // --- NOUVEAU : CALCUL DE LA DISTANCE POUR LE HUD ---
+        // --- CALCUL DE LA DISTANCE POUR LE HUD ---
+        // Utilise routePos : la distance affichée reflète la position de référence active
         let targetDist = 0
         if (navState === "RETURNING_TO_CAR" && parkedLocation) {
-            targetDist = getDistMeters(myPos, parkedLocation)
+            targetDist = getDistMeters(routePos, parkedLocation)
         } else if (currentTarget) {
-            targetDist = getDistMeters(myPos, currentTarget)
+            targetDist = getDistMeters(routePos, currentTarget)
         }
         
         // Formatage de la distance (Mètres ou Kilomètres)
@@ -720,15 +737,16 @@ function getHudText() {
         }
         // --------------------------------------------------    
 
-        // FLYBY Validation — position actuelle + trajet déjà parcouru (anti-demi-tour)
+        // FLYBY Validation — routePos (GPS ou crosshair) + trajet déjà parcouru (anti-demi-tour)
         let targetWasValidated = false
         let remainingPoints =[]
         let flybyRadius = (navState === "DRIVING" || navState === "RETURNING_TO_CAR") ? 15 : 10
 
         for (let i = 0; i < unvisitedPoints.length; i++) {
             let pt = unvisitedPoints[i]
-            // Vérification 1 : proximité immédiate (comportement original)
+            // Vérification 1 : proximité immédiate GPS ou crosshair
             let nearNow = getDistMeters(myPos, pt) <= flybyRadius
+                       || (crosshairPos && getDistMeters(crosshairPos, pt) <= flybyRadius)
             // Vérification 2 : le point onRoute est proche d'un endroit déjà parcouru (anti-demi-tour)
             let nearTraveled = false
             if (!nearNow && pt.onRoute) {
@@ -747,8 +765,8 @@ function getHudText() {
                     // Si des points restants sont onRoute ou à portée de conduite → pas de parking.
                     if (navState === "DRIVING") {
                         let nextPts = unvisitedPoints.filter(function(p) { return p.id !== pt.id })
-                        let needsPark = shouldParkHere(myPos, nextPts)
-                        if (needsPark) parkedLocation = { x: myPos.x, y: myPos.y }
+                        let needsPark = shouldParkHere(routePos, nextPts)
+                        if (needsPark) parkedLocation = { x: routePos.x, y: routePos.y }
                     }
                 } else {
                     showHudMessage(tr("✅ Point validé\nau passage !"))
@@ -779,14 +797,14 @@ function getHudText() {
                 // Privilégier les points onRoute (accessibles en voiture) même depuis le parking
 let onRoutePoints = unvisitedPoints.filter(function(p) { return p.onRoute && !p.isolated })
 let next = onRoutePoints.length > 0
-    ? getClosestPoint(myPos, onRoutePoints)
-    : getClosestPoint(myPos, unvisitedPoints)
+    ? getClosestPoint(routePos, onRoutePoints)
+    : getClosestPoint(routePos, unvisitedPoints)
 if (!next) {
                     navState = "RETURNING_TO_CAR"
                 } else {
                     let pt = next.point
                     let distToNext = next.distance
-                    let distToParked = getDistMeters(myPos, parkedLocation)
+                    let distToParked = getDistMeters(routePos, parkedLocation)
 
                     // Règle 1 — Point isolé (inaccessible en voiture) → toujours à pied
                     if (pt.isolated) {
@@ -828,12 +846,12 @@ if (!next) {
             } else {
     // Pas encore garé : sélection globale via /locate sur tous les sommets de toutes les géométries
     // → pour chaque géométrie : meilleur sommet = celui le plus proche d'une route
-    // → parmi tous ces meilleurs sommets : choisir celui le plus proche de myPos
+    // → parmi tous ces meilleurs sommets : choisir celui le plus proche de routePos
     lastRouteCoords = null
     currentTarget = null   // pas de cible provisoire — on attend /locate
     navState = "DRIVING"
     lastProcessPos = null
-    selectNextTarget(myPos, function(bestTarget) {
+    selectNextTarget(routePos, function(bestTarget) {
         if (navState !== "DRIVING") return
         if (!bestTarget) return
         if (!unvisitedPoints.find(function(p) { return p.id === bestTarget.id })) return
@@ -870,7 +888,7 @@ if (!next) {
 
         if (navState === "RETURNING_TO_CAR") {
             if (!parkedLocation) return
-            if (getDistMeters(myPos, parkedLocation) < 20) {
+            if (getDistMeters(routePos, parkedLocation) < 20) {
                 parkedLocation = null
                 navState = "DRIVING"
                 lastProcessPos = null
@@ -880,30 +898,31 @@ if (!next) {
                 updateNavigationLoop()
                 return
             }
-            if (!lastFootPos || getDistMeters(myPos, lastFootPos) > 3) {
-                lastFootPos = myPos
+            if (!lastFootPos || getDistMeters(routePos, lastFootPos) > 3) {
+                lastFootPos = routePos
                 clearGeometry(carRenderer)
-                drawDirectLine(myPos, parkedLocation, footRenderer)
+                drawDirectLine(routePos, parkedLocation, footRenderer)
                 needsRefresh = true
             }
         } 
         else if (navState === "WALKING_TO_POI") {
             if (!currentTarget) return
-            if (!lastFootPos || getDistMeters(myPos, lastFootPos) > 3) {
-                lastFootPos = myPos
+            if (!lastFootPos || getDistMeters(routePos, lastFootPos) > 3) {
+                lastFootPos = routePos
                 clearGeometry(carRenderer)
-                drawDirectLine(myPos, currentTarget, footRenderer)
+                drawDirectLine(routePos, currentTarget, footRenderer)
                 needsRefresh = true
             }
         }
         else if (navState === "DRIVING") {
             if (!currentTarget) return
             if (lastRouteCoords && lastRouteCoords.length >= 2) {
-                if (trimRouteToCurrentPos(myPos)) needsRefresh = true
+                if (trimRouteToCurrentPos(routePos)) needsRefresh = true
             }
-            if (!lastProcessPos || getDistMeters(myPos, lastProcessPos) > 40) {
-                lastProcessPos = myPos
-                fetchOsrmRoute(myPos, currentTarget)
+            if (!lastProcessPos || getDistMeters(routePos, lastProcessPos) > 40) {
+                let posForRoute = (lastProcessPos === null) ? myPos : routePos
+                lastProcessPos = posForRoute
+                fetchOsrmRoute(posForRoute, currentTarget)
             }
         }
 
@@ -913,9 +932,9 @@ if (!next) {
     // 1. Collecte tous les sommets de toutes les géométries restantes (non-isolées)
     // 2. Un seul appel /locate → distance à la route pour chaque sommet
     // 3. Pour chaque géométrie : garde le sommet le plus proche d'une route
-    // 4. Parmi ces meilleurs sommets : choisit celui le plus proche de myPos
-    // 5. Fallback pour les géométries sans sommets proches de route (isolées) : sommet le plus proche de myPos
-    function selectNextTarget(myPos, onDone) {
+    // 4. Parmi ces meilleurs sommets : choisit celui le plus proche de pos
+    // 5. Fallback pour les géométries sans sommets proches de route (isolées) : sommet le plus proche de pos
+    function selectNextTarget(pos, onDone) {
         let snapNavState = navState
 
         // Construire index : pour chaque sommet → quel pt (id, isolated)
@@ -936,7 +955,7 @@ if (!next) {
 
         if (allVerts.length === 0) {
             // Que des isolés → fallback simple
-            let fb = getClosestPoint(myPos, unvisitedPoints)
+            let fb = getClosestPoint(pos, unvisitedPoints)
             onDone(fb ? fb.point : null)
             return
         }
@@ -948,9 +967,9 @@ if (!next) {
         var req = new XMLHttpRequest()
         req.timeout = 8000
         req.ontimeout = function() {
-            // Fallback : géométrie la plus proche de myPos
-            let fb = getClosestPoint(myPos, unvisitedPoints.filter(function(p) { return !p.isolated }))
-            if (!fb) fb = getClosestPoint(myPos, unvisitedPoints)
+            // Fallback : géométrie la plus proche de pos
+            let fb = getClosestPoint(pos, unvisitedPoints.filter(function(p) { return !p.isolated }))
+            if (!fb) fb = getClosestPoint(pos, unvisitedPoints)
             onDone(fb ? fb.point : null)
         }
         req.onerror = req.ontimeout
@@ -984,14 +1003,14 @@ if (!next) {
                         }
                     }
 
-                    // Étape 2 : parmi les meilleurs sommets par géométrie, choisir celui le plus proche de myPos
+                    // Étape 2 : parmi les meilleurs sommets par géométrie, choisir celui le plus proche de pos
                     // Ignorer les géométries dont le meilleur sommet est à > 200m d'une route (seront traitées en isolé)
                     let bestTarget = null
                     let bestScore = 1e9
                     for (let ptId in bestPerPt) {
                         let b = bestPerPt[ptId]
-                        let distToMe = getDistMeters(myPos, b.vert)
-                        // Géométries proches d'une route : score = distance à myPos
+                        let distToMe = getDistMeters(pos, b.vert)
+                        // Géométries proches d'une route : score = distance à pos
                         // Géométries loin de toute route (> 200m) : ignorées ici → fallback isolé
                         if (b.roadDist <= 200 && distToMe < bestScore) {
                             bestScore = distToMe
@@ -1002,7 +1021,7 @@ if (!next) {
 
                     // Étape 3 : si aucune géométrie avec sommet proche route → fallback toutes géométries
                     if (!bestTarget) {
-                        let fb = getClosestPoint(myPos, unvisitedPoints)
+                        let fb = getClosestPoint(pos, unvisitedPoints)
                         bestTarget = fb ? fb.point : null
                     }
 
@@ -1011,7 +1030,7 @@ if (!next) {
                 } catch(e) {}
             }
             // Erreur HTTP → fallback
-            let fb = getClosestPoint(myPos, unvisitedPoints)
+            let fb = getClosestPoint(pos, unvisitedPoints)
             onDone(fb ? fb.point : null)
         }
         req.open("POST", url)
@@ -1021,6 +1040,7 @@ if (!next) {
 
     // --- 9. ROUTAGE VALHALLA — costing auto + use_tracks:1 (chemins agricoles, pistes, voies carrossables) ---
     function fetchOsrmRoute(start, end) {
+        iface.logMessage("[DM] fetchOsrmRoute start=" + start.x + "," + start.y + " end=" + end.x + "," + end.y, Qgis.Info)
         // (guard onRoute supprimé : refinePolygonTargetsFromRoute doit toujours pouvoir corriger le sommet)
         let snapNavState = navState
         let snapTarget = currentTarget
@@ -1102,7 +1122,8 @@ if (!next) {
     }
 
     function applyRouteResult(start, end, coords, snap, distOffRoad, snapNavState, snapTarget) {
-        if (!coords) { drawDirectLine(start, end, carRenderer); return }
+        iface.logMessage("[DM] applyRouteResult — coords=" + (coords ? coords.length + " pts" : "null") + " distOffRoad=" + distOffRoad, Qgis.Info)
+        if (!coords) { iface.logMessage("[DM] coords null → ligne directe", Qgis.Warning); drawDirectLine(start, end, carRenderer); return }
         if (navState !== snapNavState || currentTarget !== snapTarget) return
         // Prolonger la route de 10m au-delà du point cible
         let extCoords = coords
@@ -1113,7 +1134,7 @@ if (!next) {
             let dy = p2[1] - p1[1]
             let segLen = getDistMeters({ x: p1[0], y: p1[1] }, { x: p2[0], y: p2[1] })
             if (segLen > 0) {
-                // 10m en degrés (approximation : 1 degré ���� 111320m en lat, cos(lat)*111320 en lon)
+                // 10m en degrés (approximation : 1 degré ≈ 111320m en lat, cos(lat)*111320 en lon)
                 let mPerDegLat = 111320
                 let mPerDegLon = Math.cos(p2[1] * Math.PI / 180) * 111320
                 let extLon = p2[0] + (dx / segLen) * (10 / mPerDegLon)
@@ -1342,13 +1363,13 @@ if (!next) {
         if(empty) renderer.geometryWrapper.qgsGeometry = empty
     }
 
-    function trimRouteToCurrentPos(myPos) {
+    function trimRouteToCurrentPos(pos) {
     if (!lastRouteCoords || lastRouteCoords.length < 2) return false
     let minDist = 1e9
     let closestIdx = 0
     for (let i = 0; i < lastRouteCoords.length; i++) {
         let pt = { x: lastRouteCoords[i][0], y: lastRouteCoords[i][1] }
-        let d = getDistMeters(myPos, pt)
+        let d = getDistMeters(pos, pt)
         if (d < minDist) { minDist = d; closestIdx = i }
     }
 
@@ -1362,7 +1383,7 @@ if (!next) {
             )
         }
         if (remainingDist < 10 && navState === "DRIVING") {
-            parkedLocation = { x: myPos.x, y: myPos.y }
+            parkedLocation = { x: pos.x, y: pos.y }
             currentTarget = pickBestVertex(currentTarget)
             navState = "WALKING_TO_POI"
             routeHasFootSegment = false
@@ -1383,13 +1404,48 @@ if (!next) {
 }
     // --- 11. UTILS ---
     function getCurrentGpsPosition() {
+        // Tentative 1 : iface.positionSource (fonctionne dans certains contextes)
         if (iface.positionSource && iface.positionSource.active) {
             let gpsPt = iface.positionSource.sourcePosition
-            if (gpsPt && (gpsPt.x !== 0 || gpsPt.y !== 0)) return { x: gpsPt.x, y: gpsPt.y }
+            if (gpsPt && (gpsPt.x !== 0 || gpsPt.y !== 0)) {
+                iface.logMessage("[DM] GPS via positionSource: " + gpsPt.x + "," + gpsPt.y, Qgis.Info)
+                return { x: gpsPt.x, y: gpsPt.y }
+            }
         }
+        // Tentative 2 : locator.positionInformation (crosshair QField)
+        try {
+            let locatorItem = iface.findItemByObjectName("locator")
+            if (locatorItem && locatorItem.positionInformation) {
+                let pi = locatorItem.positionInformation
+                if (pi.latitude !== undefined && pi.longitude !== undefined
+                        && (pi.latitude !== 0 || pi.longitude !== 0)) {
+                    iface.logMessage("[DM] GPS via locator.positionInformation: " + pi.longitude + "," + pi.latitude, Qgis.Info)
+                    return { x: pi.longitude, y: pi.latitude }
+                }
+            }
+        } catch(e) {
+            iface.logMessage("[DM] locator tentative EXCEPTION: " + e, Qgis.Warning)
+        }
+        // Tentative 3 : navigation.location (QgsPoint C++ en CRS carte → reprojeter en WGS84)
+        try {
+            let navItem = iface.findItemByObjectName("navigation")
+            if (navItem && navItem.location) {
+                let loc = navItem.location
+                if ((loc.x !== 0 || loc.y !== 0)) {
+                    let wgs = GeometryUtils.reprojectPointToWgs84(loc, mapCanvas.mapSettings.destinationCrs)
+                    if (wgs && (wgs.x !== 0 || wgs.y !== 0)) {
+                        iface.logMessage("[DM] GPS via navigation.location (WGS84): " + wgs.x + "," + wgs.y, Qgis.Info)
+                        return { x: wgs.x, y: wgs.y }
+                    }
+                }
+            }
+        } catch(e) {
+            iface.logMessage("[DM] navigation tentative EXCEPTION: " + e, Qgis.Warning)
+        }
+        iface.logMessage("[DM] getCurrentGpsPosition: toutes tentatives échouées → null", Qgis.Warning)
         return null
     }
-    
+
     function getMapCenter() {
         let extent = mapCanvas.mapSettings.extent
         let cx = (extent.xMinimum + extent.xMaximum) / 2
@@ -1402,6 +1458,18 @@ if (!next) {
             if (w) return { x: w.x, y: w.y }
         }
         return null
+    }
+
+    function getCrosshairPosition() {
+        try {
+            let locatorItem = iface.findItemByObjectName("locator")
+            if (locatorItem && locatorItem.currentCoordinate) {
+                let coord = locatorItem.currentCoordinate
+                let wgs = GeometryUtils.reprojectPointToWgs84(coord, mapCanvas.mapSettings.destinationCrs)
+                if (wgs && (wgs.x !== 0 || wgs.y !== 0)) return { x: wgs.x, y: wgs.y }
+            }
+        } catch(e) {}
+        return getMapCenter()
     }
 
     function getDistMeters(pt1, pt2) {
