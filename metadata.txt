@@ -3,5 +3,5 @@ name=Filter
 description= filter your features
 author=woupss
 icon=icon.svg
-version=1.4
+version=1.5
 homepage=https://github.com/woupss/qfield-filter-plugin

@@ -81,14 +81,6 @@ Item {
         id: drivemeTool
     }
 
-    CoordinateTransformer {
-        id: gpsMapTransformer
-        sourceCrs: CoordinateReferenceSystemUtils.wgs84Crs()
-        destinationCrs: mapCanvas.mapSettings.destinationCrs
-        transformContext: qgisProject.transformContext
-    }
-
-
     // === INITIALISATION ===
     Component.onCompleted: {
         iface.addItemToPluginsToolbar(toolbarButton)
@@ -486,68 +478,31 @@ Item {
     Timer { id: searchDelayTimer; interval: 500; repeat: false; onTriggered: performDynamicSearch() }
 
     Timer {
-        id: zoomTimer
-        interval: 200
-        repeat: false
-        onTriggered: {
-            performZoom()
-            if (filterToolRoot.pendingDriveMeLayer !== null)
-                recenterTimer.restart()
-        }
-    }
-
-    Timer {
-        id: recenterTimer
-        interval: 400
-        repeat: false
-        onTriggered: {
-            try {
-                let gpsPt = drivemeTool.getCurrentGpsPosition()
-                if (gpsPt) {
-                    let gpsGeom = GeometryUtils.createGeometryFromWkt("POINT(" + gpsPt.x + " " + gpsPt.y + ")")
-                    if (gpsGeom) {
-                        gpsMapTransformer.sourcePosition = GeometryUtils.centroid(gpsGeom)
-                        let proj = gpsMapTransformer.projectedPosition
-                        if (proj && (proj.x !== 0 || proj.y !== 0)) {
-                            // Étendue actuelle = bounding box des entités filtrées (après performZoom)
-                            let featExt = mapCanvas.mapSettings.extent
-                            // Distance max entre le GPS et chaque bord de l'étendue des entités
-                            let dx = Math.max(Math.abs(proj.x - featExt.xMinimum), Math.abs(proj.x - featExt.xMaximum))
-                            let dy = Math.max(Math.abs(proj.y - featExt.yMinimum), Math.abs(proj.y - featExt.yMaximum))
-                            // Marge 10%
-                            dx = dx * 1.1
-                            dy = dy * 1.1
-                            // Centrer sur GPS avec rayon suffisant pour inclure toutes les entités
-                            let screenRatio = featExt.width / (featExt.height > 0 ? featExt.height : 1)
-                            if (dx / dy > screenRatio) {
-                                dy = dx / screenRatio
-                            } else {
-                                dx = dy * screenRatio
-                            }
-                            featExt.xMinimum = proj.x - dx
-                            featExt.xMaximum = proj.x + dx
-                            featExt.yMinimum = proj.y - dy
-                            featExt.yMaximum = proj.y + dy
-                            mapCanvas.mapSettings.setExtent(featExt, true)
-                        }
-                    }
+    id: zoomTimer
+    interval: 200
+    repeat: false
+    onTriggered: {
+        if (filterToolRoot.pendingDriveMeLayer !== null) {
+            // Calculer l'étendue sans zoomer
+            var layer = filterToolRoot.pendingDriveMeLayer
+            var bbox = layer.boundingBoxOfSelected()
+            if (bbox) {
+                try {
+                    var destCrs = mapCanvas.mapSettings.destinationCrs
+                    var featExtent = GeometryUtils.reprojectRectangle(bbox, layer.crs, destCrs)
+                    drivemeTool.startWithLayerAndExtent(layer, featExtent || bbox)
+                } catch(e) {
+                    drivemeTool.startWithLayerAndExtent(layer, bbox)
                 }
-            } catch(e) {}
-            startDriveTimer.restart()
-        }
-      }
-
-    Timer {
-        id: startDriveTimer
-        interval: 300
-        repeat: false
-        onTriggered: {
-            if (filterToolRoot.pendingDriveMeLayer !== null) {
-                drivemeTool.startWithLayer(filterToolRoot.pendingDriveMeLayer)
-                filterToolRoot.pendingDriveMeLayer = null
+            } else {
+                drivemeTool.startWithLayerAndExtent(layer, mapCanvas.mapSettings.extent)
             }
+            filterToolRoot.pendingDriveMeLayer = null
+        } else {
+            performZoom()
         }
     }
+}
 
     Timer {
         id: openListTimer; interval: 250; repeat: false
@@ -834,7 +789,7 @@ Item {
             "Show all geometries (+filtered)": "Afficher toutes géométries (+filtrées)",
             "Show feature list": "Afficher liste des entités",
             "Apply filter": "Appliquer le filtre",
-            "Filter & Drive me": "Appliquer le filtre & Guide moi",
+            "Filter & Drive me": "Appliquer le filtre & Montre-moi la route",
             "Delete filter": "Supprimer le filtre"
 
         }
@@ -1008,7 +963,7 @@ Item {
         modal: true
         width: Math.min(mainWindow.width * 0.9, 450)
         x: (mainWindow.width - width) / 2
-        y: (mainWindow.height - height) / 2
+        y: isLandscape ? (mainWindow.height - height) / 2 : (mainWindow.height - height) / 2 -65
         background: Rectangle { color: "white"; border.color: Theme.mainColor; border.width: 2; radius: 8 }
 
         property bool isLandscape: mainWindow.width > mainWindow.height
@@ -1025,7 +980,7 @@ Item {
         contentItem: ColumnLayout {
             spacing: 0
 
-            MouseArea { anchors.fill: parent; z: -1; onClicked: { if(valueField.focus) {valueField.focus=false; suggestionPopup.close()}; mouse.accepted=false } }
+            MouseArea { Layout.fillWidth: true; Layout.fillHeight: true; z: -1; onClicked: { if(valueField.focus) {valueField.focus=false; suggestionPopup.close()}; mouse.accepted=false } }
 
             ColumnLayout {
                 id: innerCol

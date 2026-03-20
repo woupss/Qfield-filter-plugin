@@ -17,10 +17,12 @@ Item {
     property var currentTarget: null   
     property int totalPointsCount: 0
     property bool isNavigating: false
+    property bool isPaused: false
     
     // HUD (Distance affichée)
     property string distanceText: "-- m"
     property string hudMessage: ""
+   // property bool hudMessagePersistent: false
     
     // ÉTATS
     property string navState: "DRIVING" 
@@ -35,6 +37,11 @@ Item {
     property var polygonVertices: ({})  // sommets WGS84 par id de polygone, pour affinage post-route
     property var polygonCenters: ({})   // point intérieur (point_on_surface ou centroïde) par id de polygone
     property var traveledCoords: []     // historique du trajet parcouru — anti-demi-tour
+    // Zoom GPS + entités filtrées — géré ici, reçu depuis FilterTool
+    property real savedZoomHW: 0
+    property real savedZoomHH: 0
+    property var pendingDriveMeLayer: null
+    property var pendingFeatExtent: null
 
     // --- TRADUCTION FR / EN ---
     property string currentLang: "fr"
@@ -53,6 +60,8 @@ Item {
         "DÉMARRER":                         { "fr": "DÉMARRER",                         "en": "START" },
         "Aucun élément trouvé":             { "fr": "Aucun élément trouvé",             "en": "No features found" },
         "Aucun point trouvé":               { "fr": "Aucun point trouvé",               "en": "No points found" },
+        "Calcul d'itinéraire en pause":               { "fr": "Calcul d'itinéraire en pause",               "en": "Show me the road in pause" },
+        "Calcul d'itinéraire activé":               { "fr": "Calcul d'itinéraire activé",               "en": "Show me the road activated" },
         "✅ Cible atteinte !":              { "fr": "✅ Cible atteinte !",              "en": "✅ Target reached!" },
         "✅ Point validé\nau passage !":   { "fr": "✅ Point validé\nau passage !",   "en": "✅ Point validated\non the way!" },
         "Retour au véhicule.":              { "fr": "Retour au véhicule.",              "en": "Return to vehicle." },
@@ -84,7 +93,7 @@ Item {
         mapSettings: mapCanvas.mapSettings
         geometryWrapper.crs: CoordinateReferenceSystemUtils.wgs84Crs()
         lineWidth: 6
-        color: "cyan" // cyan
+        color: "#7C3BFF" // purple
         opacity: 0.8
     }
 
@@ -138,6 +147,15 @@ Item {
         lineWidth: 2
         color: "#FF00FF" // Fuschia fin — flèches sommet rouge → centroïde fuschia
         opacity: 0.75
+    }
+
+// Transformateur GPS WGS84 → CRS carte, pour le zoom position+entités
+    CoordinateTransformer {
+        id: gpsMapTransformer
+        sourceCrs: CoordinateReferenceSystemUtils.wgs84Crs()
+        destinationCrs: mapCanvas.mapSettings.destinationCrs
+        transformContext: qgisProject ? qgisProject.transformContext
+                                      : CoordinateReferenceSystemUtils.emptyTransformContext()
     }
 
     // --- 2. MARQUEURS ---
@@ -234,34 +252,28 @@ Item {
     clip: true  // masque le texte qui dépasse
 
     Text {
-        id: hudText
-        text: getHudText()
-        color: "white"
-        font.pixelSize: 14
-        font.bold: true
-        anchors.verticalCenter: parent.verticalCenter
+    id: hudText
+    text: getHudText()
+    color: "white"
+    font.pixelSize: 14
+    font.bold: true
+    anchors.verticalCenter: parent.verticalCenter
 
-        // Lance le défilement si le texte est trop large
-        onTextChanged: {
-            if (hudText.width > hudText.parent.width) {
-                marqueeAnim.from = hudText.parent.width
-                marqueeAnim.to = -hudText.width
-                marqueeAnim.duration = (hudText.width + hudText.parent.width) * 16
-                marqueeAnim.restart()
-            } else {
-                marqueeAnim.stop()
-                hudText.x = 0
-            }
-        }
-
+    SequentialAnimation on x {
+        id: marqueeAnim
+        loops: Animation.Infinite
+        running: hudText.implicitWidth > hudText.parent.width
+        PauseAnimation  { duration: 500 }
         NumberAnimation {
-            id: marqueeAnim
-            target: hudText
-            property: "x"
-            loops: Animation.Infinite
+            from:     hudText.parent ? hudText.parent.width : 0
+            to:       -(hudText.implicitWidth)
+            duration: hudText.implicitWidth > 0
+                        ? (hudText.implicitWidth + (hudText.parent ? hudText.parent.width : 0)) * 16
+                        : 1
             easing.type: Easing.Linear
         }
     }
+}
 }
 
     // 3. Distance
@@ -273,31 +285,46 @@ Item {
         Text { text: distanceText; color: "cyan"; font.pixelSize: 18; font.bold: true }
     }
 
-    // Bouton d'arrêt
+// Bouton pause/stop
     Item {
         Layout.fillWidth: true
         Layout.preferredWidth: 2   // poids = 2 parts (plus petit)
         Layout.alignment: Qt.AlignVCenter
         implicitHeight: parent.height
+
         QfToolButton {
+            id: hudButton
             anchors.centerIn: parent
-            iconSource: "DriveMeicon.svg"; iconColor: "red"; flat: true
-            onClicked: stopNavigation()
+            iconSource: "DriveMeicon.svg"
+            iconColor: drivemeTool.isPaused ? "orange" : "red"
+            flat: true
+
+            onClicked: {
+                drivemeTool.isPaused = !drivemeTool.isPaused
+drivemeTool.isPaused ? showHudMessage(tr("Calcul d'itinéraire en pause")) : showHudMessage(tr("Calcul d'itinéraire activé"))
+            }
+
+            onPressAndHold: {
+                drivemeTool.isPaused = false
+                stopNavigation()
+            }
         }
     }
   }
 }
 
-Timer {
-    id: hudMessageTimer
-    interval: 3000  // Message visible 3 secondes
-    repeat: false
-    onTriggered: hudMessage = ""
-}
+// Timer {
+  //  id: hudMessageTimer
+ //   interval: 4000
+ //   repeat: false
+ //   onTriggered: {
+ //       if (!drivemeTool.hudMessagePersistent)
+ //           hudMessage = ""
+ //   }
+// }
 
 function showHudMessage(text) {
     hudMessage = text
-    hudMessageTimer.restart()
 }
 
 function getHudText() {
@@ -317,21 +344,143 @@ function getHudText() {
         onTriggered: updateNavigationLoop()
     }
 
+// --- ZOOM GPS + ENTITÉS FILTRÉES ---
+    // Déclenché par startWithLayerAndExtent : calcule l'étendue englobant
+    // à la fois la position GPS et toutes les entités filtrées, puis zoome.
+    Timer {
+        id: recenterTimer
+        interval: 400
+        repeat: false
+        onTriggered: {
+            try {
+                let gpsPt = getCurrentGpsPosition()
+                if (gpsPt) {
+                    let gpsGeom = GeometryUtils.createGeometryFromWkt(
+                        "POINT(" + gpsPt.x + " " + gpsPt.y + ")")
+                    if (gpsGeom) {
+                        gpsMapTransformer.sourcePosition = GeometryUtils.centroid(gpsGeom)
+                        let proj = gpsMapTransformer.projectedPosition
+                        if (proj && (proj.x !== 0 || proj.y !== 0)) {
+                            let featExt = pendingFeatExtent
+                            // Distance max entre GPS et chaque bord de l'étendue entités
+                            let dx = Math.max(
+                                Math.abs(proj.x - featExt.xMinimum),
+                                Math.abs(proj.x - featExt.xMaximum))
+                            let dy = Math.max(
+                                Math.abs(proj.y - featExt.yMinimum),
+                                Math.abs(proj.y - featExt.yMaximum))
+                            // Marge 10 %
+                            dx = dx * 1.1
+                            dy = dy * 1.1
+                            // Conserver le ratio écran
+                            let screenRatio = featExt.width / (featExt.height > 0 ? featExt.height : 1)
+                            if (dx / dy > screenRatio) {
+                                dy = dx / screenRatio
+                            } else {
+                                dx = dy * screenRatio
+                            }
+                            featExt.xMinimum = proj.x - dx
+                            featExt.xMaximum = proj.x + dx
+                            featExt.yMinimum = proj.y - dy
+                            featExt.yMaximum = proj.y + dy
+                            mapCanvas.mapSettings.setExtent(featExt, true)
+                        }
+                    }
+                }
+            } catch(e) {}
+            startDriveTimer.restart()
+        }
+    }
+
+    // Démarre la navigation une fois le zoom GPS+entités appliqué.
+    Timer {
+        id: startDriveTimer
+        interval: 300
+        repeat: false
+        onTriggered: {
+            if (pendingDriveMeLayer !== null) {
+                startNavigationProcess(pendingDriveMeLayer)
+                pendingDriveMeLayer = null
+                zoomToGpsTimer.restart()
+            }
+        }
+    }
+
+    // Après démarrage navigation : recentre la carte sur le GPS
+    // avec la taille de l'étendue entités (vue de travail confortable).
+    Timer {
+        id: zoomToGpsTimer
+        interval: 3500
+        repeat: false
+        onTriggered: {
+            try {
+                let gpsPt = getCurrentGpsPosition()
+                if (gpsPt) {
+                    let gpsGeom = GeometryUtils.createGeometryFromWkt(
+                        "POINT(" + gpsPt.x + " " + gpsPt.y + ")")
+                    if (gpsGeom) {
+                        gpsMapTransformer.sourcePosition = GeometryUtils.centroid(gpsGeom)
+                        let proj = gpsMapTransformer.projectedPosition
+                        if (proj && (proj.x !== 0 || proj.y !== 0)) {
+                            let ext = mapCanvas.mapSettings.extent
+                            // Rayon de zoom fixe autour du GPS selon l'unité du CRS
+let destCrs = mapCanvas.mapSettings.destinationCrs
+let zoomRadius = 200  // valeur de base en mètres (Lambert-93, UTM, etc.)
+if (destCrs && destCrs.isGeographic) {
+    // CRS géographique (degrés) — 300m ≈ 0.0018°
+    zoomRadius = 0.0027
+}
+let screenRatio = mapCanvas.width / (mapCanvas.height > 0 ? mapCanvas.height : 1)
+let hw = zoomRadius
+let hh = zoomRadius / screenRatio
+                            ext.xMinimum = proj.x - hw
+                            ext.xMaximum = proj.x + hw
+                            ext.yMinimum = proj.y - hh
+                            ext.yMaximum = proj.y + hh
+                            mapCanvas.mapSettings.setExtent(ext, true)
+                        }
+                    }
+                }
+            } catch(e) {}
+        }
+    }
+
     // --- 5. POINT D'ENTRÉE EXTERNE ---
     // Appelé par FilterTool via iface.findItemByObjectName("driveMe")
     // Lance directement la navigation sur la couche filtrée, sans dialogue ni bouton
+
     function startWithLayer(layer) {
-        iface.logMessage("[DM] startWithLayer appelé — layer=" + (layer ? layer.name : "null"), Qgis.Info)
+    //    iface.logMessage("[DM] startWithLayer appelé — layer=" + (layer ? layer.name : "null"), Qgis.Info)
         if (layer) {
             startNavigationProcess(layer)
         } else {
-            iface.logMessage("[DM] startWithLayer : layer null — abandon", Qgis.Warning)
+       //     iface.logMessage("[DM] startWithLayer : layer null — abandon", Qgis.Warning)
         }
     }
+
+// Point d'entrée depuis FilterTool quand "Filter & Drive me" est activé.
+    // Reçoit la couche filtrée ET l'étendue des entités filtrées (après zoom FilterTool).
+    // Gère ici : zoom GPS+entités → démarrage navigation → zoom retour sur GPS.
+
+    function startWithLayerAndExtent(layer, featExtent) {
+        if (!layer) return
+        pendingDriveMeLayer = layer
+        pendingFeatExtent   = featExtent
+        // Mémorise la demi-taille de l'étendue entités pour le re-zoom final sur GPS
+        savedZoomHW = featExtent ? featExtent.width  / 2 : 0
+        savedZoomHH = featExtent ? featExtent.height / 2 : 0
+        recenterTimer.restart()
+    }
+
 
     // --- 6. NAVIGATION ---
     function stopNavigation() {
         isNavigating = false
+        isPaused = false
+
+       // hudMessagePersistent = false
+        hudMessage = ""
+
         // Nettoyage lignes
         let empty = GeometryUtils.createGeometryFromWkt("LINESTRING(0 0, 0.000001 0.000001)")
         if(empty) {
@@ -360,19 +509,20 @@ function getHudText() {
 
     function startNavigationProcess(layer) {
         try {
-            iface.logMessage("[DM] startNavigationProcess — layer=" + layer.name, Qgis.Info)
+          //  iface.logMessage("[DM] startNavigationProcess — layer=" + layer.name, Qgis.Info)
             chainWalkThreshold = 50
 
             // Vérification sélection préexistante via selectedFeatures() (API QField confirmée)
             let preSelected = layer.selectedFeatures()
             let hasPreSelection = preSelected && preSelected.length > 0
-            iface.logMessage("[DM] preSelected.length=" + (preSelected ? preSelected.length : 0) + " hasPreSelection=" + hasPreSelection, Qgis.Info)
+          //  iface.logMessage("[DM] preSelected.length=" + (preSelected ? preSelected.length : 0) + " hasPreSelection=" + hasPreSelection, Qgis.Info)
             let feats = []
 
             if (hasPreSelection) {
                 // Des entités sont déjà sélectionnées : on les utilise telles quelles
                 // On NE touche PAS à la sélection → le jaune reste affiché sur la carte
                 feats = preSelected
+                layer.removeSelection()
             } else {
                 // Aucune sélection préalable (couche points/lignes) : sélectionne tout puis nettoie
                 layer.selectAll()
@@ -407,7 +557,7 @@ function getHudText() {
             }
 
         } catch(e) {
-            iface.logMessage("[DM] startNavigationProcess EXCEPTION: " + e.toString(), Qgis.Critical)
+        //    iface.logMessage("[DM] startNavigationProcess EXCEPTION: " + e.toString(), Qgis.Critical)
         }
     }
 
@@ -596,7 +746,7 @@ function getHudText() {
 
     // --- DÉMARRAGE NAVIGATION : commun points/lignes et polygones ---
     function proceedWithNavigation(rawPoints) {
-        iface.logMessage("[DM] proceedWithNavigation — rawPoints.length=" + rawPoints.length, Qgis.Info)
+   //     iface.logMessage("[DM] proceedWithNavigation — rawPoints.length=" + rawPoints.length, Qgis.Info)
         if (rawPoints.length < 1) { showHudMessage(tr("Aucun point trouvé")); iface.logMessage("[DM] Aucun point — abandon", Qgis.Warning); return }
 
         unvisitedPoints = rawPoints
@@ -604,9 +754,9 @@ function getHudText() {
         
         // Premier tri
         let startPos = getCurrentGpsPosition()
-        iface.logMessage("[DM] GPS=" + (startPos ? (startPos.x + "," + startPos.y) : "null"), Qgis.Info)
+     //   iface.logMessage("[DM] GPS=" + (startPos ? (startPos.x + "," + startPos.y) : "null"), Qgis.Info)
         if (!startPos) startPos = getMapCenter() 
-        iface.logMessage("[DM] startPos final=" + (startPos ? (startPos.x + "," + startPos.y) : "null"), Qgis.Info)
+    //    iface.logMessage("[DM] startPos final=" + (startPos ? (startPos.x + "," + startPos.y) : "null"), Qgis.Info)
         if (!startPos) startPos = rawPoints[0]
         
         currentTarget = getClosestPoint(startPos, unvisitedPoints).point
@@ -614,6 +764,7 @@ function getHudText() {
         parkedLocation = null
         isNavigating = true
         lastProcessPos = null
+        showHudMessage(tr("En route."))
         
         // Optimisation Trip en tache de fond
         if (unvisitedPoints.length >= 2 && unvisitedPoints.length < 50) {
@@ -696,7 +847,7 @@ function getHudText() {
 
     // --- 8. BOUCLE PRINCIPALE ---
     function updateNavigationLoop() {
-        if (!isNavigating) return
+        if (!isNavigating || isPaused) return
 
         // myPos = position GPS réelle du conducteur (physique)
         let myPos = getCurrentGpsPosition()
@@ -1040,7 +1191,7 @@ if (!next) {
 
     // --- 9. ROUTAGE VALHALLA — costing auto + use_tracks:1 (chemins agricoles, pistes, voies carrossables) ---
     function fetchOsrmRoute(start, end) {
-        iface.logMessage("[DM] fetchOsrmRoute start=" + start.x + "," + start.y + " end=" + end.x + "," + end.y, Qgis.Info)
+    //    iface.logMessage("[DM] fetchOsrmRoute start=" + start.x + "," + start.y + " end=" + end.x + "," + end.y, Qgis.Info)
         // (guard onRoute supprimé : refinePolygonTargetsFromRoute doit toujours pouvoir corriger le sommet)
         let snapNavState = navState
         let snapTarget = currentTarget
@@ -1122,7 +1273,7 @@ if (!next) {
     }
 
     function applyRouteResult(start, end, coords, snap, distOffRoad, snapNavState, snapTarget) {
-        iface.logMessage("[DM] applyRouteResult — coords=" + (coords ? coords.length + " pts" : "null") + " distOffRoad=" + distOffRoad, Qgis.Info)
+      //  iface.logMessage("[DM] applyRouteResult — coords=" + (coords ? coords.length + " pts" : "null") + " distOffRoad=" + distOffRoad, Qgis.Info)
         if (!coords) { iface.logMessage("[DM] coords null → ligne directe", Qgis.Warning); drawDirectLine(start, end, carRenderer); return }
         if (navState !== snapNavState || currentTarget !== snapTarget) return
         // Prolonger la route de 10m au-delà du point cible
@@ -1408,7 +1559,7 @@ if (!next) {
         if (iface.positionSource && iface.positionSource.active) {
             let gpsPt = iface.positionSource.sourcePosition
             if (gpsPt && (gpsPt.x !== 0 || gpsPt.y !== 0)) {
-                iface.logMessage("[DM] GPS via positionSource: " + gpsPt.x + "," + gpsPt.y, Qgis.Info)
+              //  iface.logMessage("[DM] GPS via positionSource: " + gpsPt.x + "," + gpsPt.y, Qgis.Info)
                 return { x: gpsPt.x, y: gpsPt.y }
             }
         }
@@ -1419,12 +1570,12 @@ if (!next) {
                 let pi = locatorItem.positionInformation
                 if (pi.latitude !== undefined && pi.longitude !== undefined
                         && (pi.latitude !== 0 || pi.longitude !== 0)) {
-                    iface.logMessage("[DM] GPS via locator.positionInformation: " + pi.longitude + "," + pi.latitude, Qgis.Info)
+                  //  iface.logMessage("[DM] GPS via locator.positionInformation: " + pi.longitude + "," + pi.latitude, Qgis.Info)
                     return { x: pi.longitude, y: pi.latitude }
                 }
             }
         } catch(e) {
-            iface.logMessage("[DM] locator tentative EXCEPTION: " + e, Qgis.Warning)
+         //   iface.logMessage("[DM] locator tentative EXCEPTION: " + e, Qgis.Warning)
         }
         // Tentative 3 : navigation.location (QgsPoint C++ en CRS carte → reprojeter en WGS84)
         try {
@@ -1434,15 +1585,15 @@ if (!next) {
                 if ((loc.x !== 0 || loc.y !== 0)) {
                     let wgs = GeometryUtils.reprojectPointToWgs84(loc, mapCanvas.mapSettings.destinationCrs)
                     if (wgs && (wgs.x !== 0 || wgs.y !== 0)) {
-                        iface.logMessage("[DM] GPS via navigation.location (WGS84): " + wgs.x + "," + wgs.y, Qgis.Info)
+                     //   iface.logMessage("[DM] GPS via navigation.location (WGS84): " + wgs.x + "," + wgs.y, Qgis.Info)
                         return { x: wgs.x, y: wgs.y }
                     }
                 }
             }
         } catch(e) {
-            iface.logMessage("[DM] navigation tentative EXCEPTION: " + e, Qgis.Warning)
+          //  iface.logMessage("[DM] navigation tentative EXCEPTION: " + e, Qgis.Warning)
         }
-        iface.logMessage("[DM] getCurrentGpsPosition: toutes tentatives échouées → null", Qgis.Warning)
+      //  iface.logMessage("[DM] getCurrentGpsPosition: toutes tentatives échouées → null", Qgis.Warning)
         return null
     }
 
