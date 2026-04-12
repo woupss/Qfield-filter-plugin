@@ -15,17 +15,12 @@ Installation
 To install the plugin, you can use this URL :
 https://github.com/woupss/qfield-filter-plugin/releases/latest
 
-![Screenshot_2025-12-02-12-14-47-033_ch opengis qfield_dev](https://github.com/user-attachments/assets/e2e8c19e-f982-4d16-b220-a1edb357314b)
+![Screenshot_2026-04-12-02-37-35-851_ch opengis qfield](https://github.com/user-attachments/assets/2ae7da74-771b-475e-a23e-5880d95cb8f4)
 
-![Screenshot_2025-12-02-12-15-12-030_ch opengis qfield_dev](https://github.com/user-attachments/assets/cb435393-3f21-4553-91eb-3a7e57727d3b)
+![Screenshot_2026-04-12-02-38-27-030_ch opengis qfield-edit](https://github.com/user-attachments/assets/3816850d-5776-4128-9b48-192b59298295)
 
+![Screenshot_2026-04-12-02-40-32-904_ch opengis qfield-edit](https://github.com/user-attachments/assets/2f962598-b3d2-4de0-a985-64820215f643)
 
-BEFORE
-![Screenshot_2025-11-19-13-24-40-697_ch opengis qfield_dev](https://github.com/user-attachments/assets/f41f89e0-a442-446b-bb3a-b1e2a6f17c12)
+![Screenshot_2026-04-12-02-44-08-106_ch opengis qfield-edit](https://github.com/user-attachments/assets/68bda90d-3562-4537-a159-a31c1a659f63)
 
-AFTER filtering with checkbox uncheck
-![Screenshot_2025-11-19-13-25-21-903_ch opengis qfield_dev](https://github.com/user-attachments/assets/cafc9faa-0bef-4832-b64f-7d5fd02c1cac)
-
-With checkbox check
-![Screenshot_2025-11-19-13-25-51-782_ch opengis qfield_dev](https://github.com/user-attachments/assets/9b6c8453-8a25-4658-a758-52eca337d234)
 
