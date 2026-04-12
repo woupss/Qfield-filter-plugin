@@ -59,7 +59,7 @@ Item {
         property string carColor: "#FF00FF"
         property string footColor:  "#02AE0F" // "#FF9500"
         property string parkColor:   "#00FF00"
-        property string targetColor: "#0093FC"
+        property string targetColor: "##00FCF7"
         property string targetgeomColor: "cyan"
     }
 
@@ -124,6 +124,43 @@ Item {
     //}
 
     // --- 1. RENDU ---
+
+    QFieldItems.GeometryRenderer {
+    id: arrowRenderer
+    parent: mapCanvas
+    mapSettings: mapCanvas.mapSettings
+    geometryWrapper.crs: CoordinateReferenceSystemUtils.wgs84Crs()
+    lineWidth: 2
+    color: "#FFFF00"  //navColorSettings.carColor
+    opacity: 1.0
+}
+
+QFieldItems.GeometryRenderer {
+    id: footArrowRenderer
+    parent: mapCanvas
+    mapSettings: mapCanvas.mapSettings
+    geometryWrapper.crs: CoordinateReferenceSystemUtils.wgs84Crs()
+    lineWidth: 2
+    color: "#FFFF00" // navColorSettings.footColor
+    opacity: 1.00
+}
+
+    QFieldItems.GeometryRenderer {
+        id: onRouteRenderer
+        parent: mapCanvas
+        mapSettings: mapCanvas.mapSettings
+        geometryWrapper.crs: CoordinateReferenceSystemUtils.wgs84Crs()
+        lineWidth: 4
+        color: navColorSettings.targetColor
+        opacity: 1.0
+        SequentialAnimation on opacity {
+            loops: Animation.Infinite
+            running: isNavigating
+            NumberAnimation { from: 0.9; to: 0.1; duration: 500; easing.type: Easing.InOutQuad }
+            NumberAnimation { from: 0.1; to: 0.9; duration: 500; easing.type: Easing.InOutQuad }
+        }
+    }
+
     QFieldItems.GeometryRenderer {
         id: carRenderer
         parent: mapCanvas
@@ -142,48 +179,6 @@ Item {
         lineWidth: 5
         color: navColorSettings.footColor
         opacity: 1.0
-    }
-
-    QFieldItems.GeometryRenderer {
-        id: onRouteRenderer
-        parent: mapCanvas
-        mapSettings: mapCanvas.mapSettings
-        geometryWrapper.crs: CoordinateReferenceSystemUtils.wgs84Crs()
-        lineWidth: 14
-        color: navColorSettings.targetColor
-        opacity: 1.0
-        SequentialAnimation on opacity {
-            loops: Animation.Infinite
-            running: isNavigating
-            NumberAnimation { from: 0.9; to: 0.1; duration: 500; easing.type: Easing.InOutQuad }
-            NumberAnimation { from: 0.1; to: 0.9; duration: 500; easing.type: Easing.InOutQuad }
-        }
-    }
-
-    QFieldItems.GeometryRenderer {
-        id: polygonCenterRenderer
-        parent: mapCanvas
-        mapSettings: mapCanvas.mapSettings
-        geometryWrapper.crs: CoordinateReferenceSystemUtils.wgs84Crs()
-        lineWidth: 4
-        color: "cyan" // Fuschia — centre du polygone lié à la cible rouge courante
-        opacity: 1.0
-        SequentialAnimation on opacity {
-            loops: Animation.Infinite
-            running: isNavigating
-            NumberAnimation { from: 0.9; to: 0.15; duration: 500; easing.type: Easing.InOutQuad }
-            NumberAnimation { from: 0.15; to: 0.9; duration: 500; easing.type: Easing.InOutQuad }
-        }
-    }
-
-    QFieldItems.GeometryRenderer {
-        id: arrowRenderer
-        parent: mapCanvas
-        mapSettings: mapCanvas.mapSettings
-        geometryWrapper.crs: CoordinateReferenceSystemUtils.wgs84Crs()
-        lineWidth: 2
-        color: "cyan" // Fuschia fin — flèches sommet rouge → centroïde fuschia
-        opacity: 0.75
     }
 
     // Transformateur GPS WGS84 → CRS carte, pour le zoom position+entités
@@ -214,11 +209,27 @@ Item {
         x: targetScreenPos.screenPoint.x - width / 2
         y: targetScreenPos.screenPoint.y - height / 2
         width: 50; height: 50
-        Rectangle { anchors.centerIn: parent; width: 16; height: 16; radius: 8; color: navColorSettings.targetColor; border.color: "white"; border.width: 2 }
+        Rectangle { anchors.centerIn: parent; width: 16; height: 16; radius: 8; color: "#ff00ff"; border.color: "yellow"; border.width: 2 }
         Rectangle {
-            anchors.centerIn: parent; width: parent.width; height: parent.height; radius: width / 2; color: "transparent"; border.color: navColorSettings.targetColor; border.width: 3
+            anchors.centerIn: parent; width: parent.width; height: parent.height; radius: width / 2; color: "transparent"; border.color: "yellow"; border.width: 3
             SequentialAnimation on scale { loops: Animation.Infinite; running: blinkingTarget.visible; NumberAnimation { from: 0.2; to: 1.0; duration: 1200; easing.type: Easing.OutQuad } }
             SequentialAnimation on opacity { loops: Animation.Infinite; running: blinkingTarget.visible; NumberAnimation { from: 1.0; to: 0.0; duration: 1200; easing.type: Easing.OutQuad } }
+        }
+    }
+
+    QFieldItems.GeometryRenderer {
+        id: polygonCenterRenderer
+        parent: mapCanvas
+        mapSettings: mapCanvas.mapSettings
+        geometryWrapper.crs: CoordinateReferenceSystemUtils.wgs84Crs()
+        lineWidth: 4
+        color: "cyan" // Fuschia — centre du polygone lié à la cible rouge courante
+        opacity: 1.0
+        SequentialAnimation on opacity {
+            loops: Animation.Infinite
+            running: isNavigating
+            NumberAnimation { from: 1.0; to: 0.55; duration: 500; easing.type: Easing.InOutQuad }
+            NumberAnimation { from: 0.55; to: 1.0; duration: 500; easing.type: Easing.InOutQuad }
         }
     }
 
@@ -479,9 +490,9 @@ Item {
                         if (proj && (proj.x !== 0 || proj.y !== 0)) {
                             let ext = mapCanvas.mapSettings.extent
                             let destCrs = mapCanvas.mapSettings.destinationCrs
-                            let zoomRadius = 300
+                            let zoomRadius = 200
                             if (destCrs && destCrs.isGeographic) {
-                                zoomRadius = 0.0027
+                                zoomRadius = 0.0018
                             }
                             let screenRatio = mapCanvas.width / (mapCanvas.height > 0 ? mapCanvas.height : 1)
                             let hw = zoomRadius
@@ -544,12 +555,10 @@ Item {
 
         let empty = GeometryUtils.createGeometryFromWkt("LINESTRING(0 0, 0.000001 0.000001)")
         if(empty) {
-            carRenderer.geometryWrapper.qgsGeometry = empty
-            footRenderer.geometryWrapper.qgsGeometry = empty
-            onRouteRenderer.geometryWrapper.qgsGeometry = empty
-            polygonCenterRenderer.geometryWrapper.qgsGeometry = empty
-            arrowRenderer.geometryWrapper.qgsGeometry = empty
-        }
+    carRenderer.geometryWrapper.qgsGeometry = empty; footRenderer.geometryWrapper.qgsGeometry = empty
+    onRouteRenderer.geometryWrapper.qgsGeometry = empty; polygonCenterRenderer.geometryWrapper.qgsGeometry = empty
+    arrowRenderer.geometryWrapper.qgsGeometry = empty; footArrowRenderer.geometryWrapper.qgsGeometry = empty
+}
         let emptyPoint = GeometryUtils.createGeometryFromWkt("POINT(0 0)")
         if (emptyPoint) {
             carTransformer.sourcePosition = GeometryUtils.centroid(emptyPoint)
@@ -860,10 +869,16 @@ Item {
         let myPos = getCurrentGpsPosition()
         if (!myPos) myPos = getCrosshairPosition()
         if (!myPos) return
+//========WITH CROSSHAIR CALCULATION============
+      //  let crosshairPos = getCrosshairPosition()
+      //  let routePos = (crosshairPos && getDistMeters(myPos, crosshairPos) > 20) ? crosshairPos : myPos
+//===========================================
 
-        let crosshairPos = getCrosshairPosition()
-        let routePos = (crosshairPos && getDistMeters(myPos, crosshairPos) > 20) ? crosshairPos : myPos
-
+//========WITHOUT CROSSHAIR CALCULATION========
+         let crosshairPos = getCrosshairPosition()
+let crosshairOnGps = !crosshairPos || getDistMeters(myPos, crosshairPos) <= 20
+let routePos = myPos  
+//=============================================
         // --- ENREGISTREMENT DU TRAJET PARCOURU ---
         if (navState === "DRIVING") {
             let lastTraveled = traveledCoords.length > 0 ? traveledCoords[traveledCoords.length - 1] : null
@@ -966,7 +981,7 @@ Item {
         if (unvisitedPoints.length === 0) {
             if (parkedLocation && navState !== "RETURNING_TO_CAR") {
                 navState = "RETURNING_TO_CAR"
-                showHudMessage(tr("Retour au v����hicule."))
+                showHudMessage(tr("Retour au véhicule."))
             } else if (navState !== "RETURNING_TO_CAR") {
                 stopNavigation()
                 showHudMessage(tr("🏁 Terminé !"), true)
@@ -1086,18 +1101,19 @@ Item {
         if (navState === "RETURNING_TO_CAR") {
             if (!parkedLocation) return
             if (getDistMeters(routePos, parkedLocation) < 20) {
-                parkedLocation = null
-                navState = "DRIVING"
-                lastProcessPos = null
-                lastRouteCoords = null
-                lastFootPos = null
-                lastFootRouteCoords = null
-                footRoutePending = false
-                showHudMessage(tr("En route."))
-                updateNavigationLoop()
-                return
-            }
-            if (!lastFootPos) {
+    parkedLocation = null
+    navState = "DRIVING"
+    lastProcessPos = null
+    lastRouteCoords = null
+    lastFootPos = null
+    lastFootRouteCoords = null
+    footRoutePending = false
+    clearGeometry(footRenderer)
+    clearGeometry(footArrowRenderer)
+    showHudMessage(tr("En route."))
+    return
+}
+            if (!lastFootPos && crosshairOnGps) {
                 // Premier tick : lancer fetchFootRoute (qui dessine direct line immédiatement)
                 // puis effacer carRenderer seulement après
                 lastFootPos = routePos
@@ -1135,7 +1151,7 @@ Item {
             }
 
             // Effacer le tracé voiture une seule fois à l'entrée dans cet état
-            if (!lastFootPos) {
+            if (!lastFootPos && crosshairOnGps) {
            //     clearGeometry(carRenderer)
                 fetchFootRoute(routePos, currentTarget)
                 lastFootPos = routePos
@@ -1161,10 +1177,17 @@ Item {
             if (lastRouteCoords && lastRouteCoords.length >= 2) {
                 if (trimRouteToCurrentPos(routePos)) needsRefresh = true
             }
-            if (!lastProcessPos || getDistMeters(routePos, lastProcessPos) > 40) {
-                lastProcessPos = routePos
-                fetchOsrmRoute(routePos, currentTarget)
-            }
+//==========WITH CROSSHAIR CALCULATION==========
+         //   if (!lastProcessPos || getDistMeters(routePos, lastProcessPos) > 40) {
+            //    lastProcessPos = routePos
+            //    fetchOsrmRoute(routePos, currentTarget)
+          //  }
+//==========WITHOUT CROSSHAIR CALCULATION=======
+           if (crosshairOnGps && (!lastProcessPos || getDistMeters(routePos, lastProcessPos) > 40)) {
+    lastProcessPos = routePos
+    fetchOsrmRoute(routePos, currentTarget)
+}
+//==========================================
         }
 
         if (needsRefresh) mapCanvas.refresh()
@@ -1436,10 +1459,12 @@ let roadPenalty = 0
 
     // --- Calcule la route piétonne UNE SEULE FOIS et la stocke ---
     function fetchFootRoute(start, end) {
+    if (!lastFootRouteCoords) {
         drawDirectLine(start, end, footRenderer)
-        clearGeometry(carRenderer)
-        mapCanvas.refresh()
-        valhallaFootRequest(start, end, function(coords) {
+    }
+    clearGeometry(carRenderer)
+    mapCanvas.refresh()
+    valhallaFootRequest(start, end, function(coords) {
             if (navState !== "WALKING_TO_POI" && navState !== "RETURNING_TO_CAR") return
             footRoutePending = false
             if (coords && coords.length >= 2) {
@@ -1452,11 +1477,13 @@ let roadPenalty = 0
 
                 // Si le 2ème point s'éloigne de la cible → chemin part en arrière → ligne droite
                 if (distSecondToEnd > distStartToEnd + 15) {
-                    lastFootRouteCoords = null
-                    drawDirectLine(start, end, footRenderer)
-                    mapCanvas.refresh()
-                    return
-                }
+    lastFootRouteCoords = null
+    drawDirectLine(start, end, footRenderer)
+    clearGeometry(footArrowRenderer)
+    mapCanvas.refresh()
+    return
+}
+                
 
                 // Chemin valide → forcer départ et arrivée exacts
                 coords[0] = [start.x, start.y]
@@ -1464,12 +1491,12 @@ let roadPenalty = 0
                 if (getDistMeters(snapEnd, end) > 5) {
                     coords = coords.concat([[end.x, end.y]])
                 }
-                lastFootRouteCoords = coords
-                drawLineFromCoords(coords, footRenderer)
+                lastFootRouteCoords = coords; drawLineFromCoords(coords, footRenderer); drawArrows(coords, footArrowRenderer)
             } else {
-                lastFootRouteCoords = null
-                drawDirectLine(start, end, footRenderer)
-            }
+    lastFootRouteCoords = null
+    drawDirectLine(start, end, footRenderer)
+    clearGeometry(footArrowRenderer)
+}
             mapCanvas.refresh()
         })
     }
@@ -1485,9 +1512,11 @@ let roadPenalty = 0
         }
         if (closestIdx === 0) return false
         lastFootRouteCoords = lastFootRouteCoords.slice(closestIdx)
-        if (lastFootRouteCoords.length >= 2)
-            drawLineFromCoords(lastFootRouteCoords, footRenderer)
-        return true
+if (lastFootRouteCoords.length >= 2) {
+    drawLineFromCoords(lastFootRouteCoords, footRenderer)
+    drawArrows(lastFootRouteCoords, footArrowRenderer)
+}
+return true
     }
 
     // --- 9. ROUTAGE VALHALLA ---
@@ -1589,7 +1618,8 @@ let roadPenalty = 0
             }
         }
         drawLineFromCoords(extCoords, carRenderer)
-        lastRouteCoords = coords
+drawArrows(extCoords, arrowRenderer)
+lastRouteCoords = coords
         refinePolygonTargetsFromRoute(coords, snap)
         if (distOffRoad > 20 && !(currentTarget && currentTarget.onRoute)) {
             routeHasFootSegment = true
@@ -1771,9 +1801,70 @@ let roadPenalty = 0
     }
 
     function updateArrowRenderer() {
-        let empty = GeometryUtils.createGeometryFromWkt("LINESTRING(0 0, 0.000001 0.000001)")
-        if (empty) arrowRenderer.geometryWrapper.qgsGeometry = empty
+    // Les flèches sont gérées par drawArrows() et stopNavigation() uniquement
+}
+
+function buildArrowsWkt(coords, intervalMeters) {
+    if (!coords || coords.length < 2) return null
+    let step = intervalMeters || 150
+    let arrowSizeM = 25
+    let maxArrows = 20
+    let lines = []; let accumulated = 0
+    let mPerDegLat = 111320
+    for (let i = 0; i < coords.length - 1; i++) {
+        let ax = coords[i][0], ay = coords[i][1]
+        let bx = coords[i+1][0], by = coords[i+1][1]
+        let segLen = getDistMeters({ x: ax, y: ay }, { x: bx, y: by })
+        accumulated += segLen
+        if (accumulated < step) continue
+        accumulated = 0
+        let mPerDegLon = Math.cos(ay * Math.PI / 180) * mPerDegLat
+        if (mPerDegLon < 1) continue
+        let dxDeg = bx - ax, dyDeg = by - ay
+        let dxM = dxDeg * mPerDegLon, dyM = dyDeg * mPerDegLat
+        let lenM = Math.sqrt(dxM * dxM + dyM * dyM)
+        if (lenM < 1) continue
+        let uxM = dxM / lenM, uyM = dyM / lenM
+        let tipX = ax + dxDeg * 0.6, tipY = ay + dyDeg * 0.6
+        let halfArm = arrowSizeM * 0.20  // 0.55
+        let angle = 2.65
+        let cos1 = Math.cos(angle), sin1 = Math.sin(angle)
+        let cos2 = Math.cos(-angle), sin2 = Math.sin(-angle)
+        let arm1xM = uxM * cos1 - uyM * sin1, arm1yM = uxM * sin1 + uyM * cos1
+        let arm2xM = uxM * cos2 - uyM * sin2, arm2yM = uxM * sin2 + uyM * cos2
+        let p1 = (tipX + arm1xM * halfArm / mPerDegLon).toFixed(7) + " " + (tipY + arm1yM * halfArm / mPerDegLat).toFixed(7)
+        let p2 = (tipX + arm2xM * halfArm / mPerDegLon).toFixed(7) + " " + (tipY + arm2yM * halfArm / mPerDegLat).toFixed(7)
+        let tip = tipX.toFixed(7) + " " + tipY.toFixed(7)
+        lines.push("((" + p1 + "," + tip + "," + p2 + "," + p1 + "))")
     }
+    if (lines.length === 0) return null
+if (lines.length > maxArrows) {
+    let stride = Math.ceil(lines.length / maxArrows)
+    let reduced = []
+    for (let i = 0; i < lines.length; i += stride) reduced.push(lines[i])
+    lines = reduced
+}
+return "MULTIPOLYGON(" + lines.join(",") + ")"
+}
+
+function drawArrows(coords, renderer) {
+    if (!coords || coords.length < 2) return
+    let totalDist = 0
+    for (let i = 0; i < coords.length - 1; i++)
+        totalDist += getDistMeters({ x: coords[i][0], y: coords[i][1] }, { x: coords[i+1][0], y: coords[i+1][1] })
+    let targetCount = 7
+    let interval = Math.max(30, totalDist / targetCount)
+    let wkt = buildArrowsWkt(coords, interval)
+    if (!wkt) {
+        // Itinéraire trop court : forcer une flèche au milieu
+        let midIdx = Math.floor(coords.length / 2)
+        let singleCoords = coords.slice(Math.max(0, midIdx - 1), midIdx + 1)
+        wkt = buildArrowsWkt(singleCoords, 1)
+    }
+    if (!wkt) return
+    let geom = GeometryUtils.createGeometryFromWkt(wkt)
+    if (geom) renderer.geometryWrapper.qgsGeometry = geom
+}
 
     // --- 10. DESSIN ---
     function drawDirectLine(start, end, renderer) {
@@ -1830,12 +1921,14 @@ let roadPenalty = 0
         }
 
         if (closestIdx === 0) return false
-        let remaining = lastRouteCoords.slice(closestIdx)
-        lastRouteCoords = remaining
-        if (remaining.length >= 2) {
-            drawLineFromCoords(remaining, carRenderer)
-        }
-        return true
+let remaining = lastRouteCoords.slice(closestIdx); lastRouteCoords = remaining
+if (remaining.length >= 2 && closestIdx > 3) {
+    drawLineFromCoords(remaining, carRenderer)
+}
+if (remaining.length >= 2) {
+    drawArrows(remaining, arrowRenderer)
+}
+return true
     }
 
     // --- 11. UTILS ---
