@@ -5,6 +5,7 @@ import Theme
 import org.qfield
 import org.qgis
 import "qrc:/qml" as QFieldItems
+import QtCore
 import "."
 
 Item {
@@ -60,8 +61,15 @@ Item {
     ]
     property int maxFilterValues: 6
 
+    //Zoom ON/OFF
+    property bool doAutoZoom: true // Activé par défaut
+
     // [{x, y, colorIdx}] — centroïdes WGS84 avec leur index couleur
     property var centroidPoints: []
+
+    // [{colorIdx, geom}] — un polygone simple par entité correspondante, avec sa couleur de filtre.
+    // Remplace l'ancienne fusion en MULTIPOLYGON (non supportée par LinePolygonShape depuis QField 4.2.9)
+    property var outlinePolygons: []
 
     // [{x, y, colorIdx, count}] — centroïdes regroupés en clusters
     property var clusteredPoints: []
@@ -74,8 +82,23 @@ Item {
     property bool wasListVisible: true
     property var pendingDriveMeLayer: null
 
+    Settings {
+    id: pluginSettings
+    category: "QFieldFilterPlugin"
+    
+    // On lie les propriétés du plugin aux réglages enregistrés
+    property alias savedLayerName: filterToolRoot.savedLayerName
+    property alias savedFieldName: filterToolRoot.savedFieldName
+    property alias savedFilterText: filterToolRoot.savedFilterText
+    property alias showAllFeatures: filterToolRoot.showAllFeatures
+    property alias showFeatureList: filterToolRoot.showFeatureList
+    property alias doAutoZoom: filterToolRoot.doAutoZoom
+    property alias filterActive: filterToolRoot.filterActive
+}
+
+//==============================================
     // 1. INSTANCIATION DES PLUGINS ENFANTS
-    // -----------------------------------------------------------
+    // -------------------------------------------
     
     DriveMe {
         id: drivemeTool
@@ -83,15 +106,63 @@ Item {
 
     // === INITIALISATION ===
     Component.onCompleted: {
-        iface.addItemToPluginsToolbar(toolbarButton)
-        updateLayers()
-        if (featureFormItem) isFormVisible = featureFormItem.visible
-        var container = iface.findItemByObjectName("mapCanvasContainer")
-        if (container) findHighlighterRecursive(container)
-        if (qgisProject) origProjectColor = qgisProject.selectionColor
-        applyCustomColors()
-    }
+    iface.addItemToPluginsToolbar(toolbarButton)
+    updateLayers()
+    if (featureFormItem) isFormVisible = featureFormItem.visible
+    var container = iface.findItemByObjectName("mapCanvasContainer")
+    if (container) findHighlighterRecursive(container)
+    if (qgisProject) origProjectColor = qgisProject.selectionColor
+    applyCustomColors()
 
+    // --- RÉAPPLIQUER LE FILTRE: ---
+    if (filterActive && savedLayerName && savedFieldName && savedFilterText) {
+        // Un petit délai est souvent nécessaire pour que QGIS charge les couches
+        restoreTimer.start()
+    }
+}
+
+//======= TIMER POUR RESTAURER LE FILTRE =========
+    //======= TIMER INTELLIGENT POUR RESTAURER LE FILTRE =========
+    Timer {
+        id: restoreTimer
+        property int attempts: 0
+        interval: 1000 // Vérifie toutes les 1 seconde (1000 ms)
+        repeat: true   // Le timer va se répéter en boucle
+        onTriggered: {
+            attempts++
+            
+            // On cherche si la couche est enfin disponible dans QGIS
+            var layer = getLayerByName(savedLayerName)
+            
+            if (layer) {
+                // BINGO ! LA COUCHE EST CHARGÉE.
+                stop() // On arrête le Timer immédiatement
+                
+                selectedLayer = layer
+                checkSourceGeometryType()
+                
+                // --- SYNCHRONISATION INDISPENSABLE ---
+                updateFields()
+                
+                var fields = getFields(selectedLayer)
+                var idx = fields.indexOf(savedFieldName)
+                if (idx >= 0) fieldSelector.currentIndex = idx
+                
+                valueField.text = savedFilterText
+                updateApplyState()
+                
+                applyFilter(false, doAutoZoom) 
+                
+                console.log("Filtre automatique appliqué avec succès après " + attempts + " secondes.")
+                
+            } else if (attempts >= 45) {
+                // SÉCURITÉ : Si la couche n'est toujours pas là après 45 secondes,
+                // on arrête de chercher pour ne pas vider la batterie (ex: couche supprimée).
+                stop()
+                console.log("Abandon de la restauration : couche introuvable après 45s.")
+            }
+        }
+    }
 
      // === BOUTON TOOLBAR ===
     QfToolButton {
@@ -147,21 +218,14 @@ Item {
             .map(function(v) { return escapeValue(v.toLowerCase().trim()) })
             .filter(function(v) { return v.length > 0 })
 
-        var empty = GeometryUtils.createGeometryFromWkt("LINESTRING(0 0, 0.000001 0.000001)")
         var newCentroidPoints = []
+        var newOutlinePolygons = []
 
         for (var vi = 0; vi < maxFilterValues; vi++) {
-            var oRend = outlineRenderers.itemAt(vi)
-
-            // Index hors plage → vider le renderer contour
-            if (vi >= values.length) {
-                if (oRend && empty) oRend.geometryWrapper.qgsGeometry = empty
-                continue
-            }
+            if (vi >= values.length) continue
 
             var singleExpr = 'lower("' + fieldName + '") LIKE \'%' + values[vi] + '%\''
-            var verticesDict = ({})
-            var featIdx = 0
+            var entries = []
 
             try {
                 var it = LayerUtils.createFeatureIteratorFromExpression(selectedLayer, singleExpr)
@@ -177,20 +241,19 @@ Item {
                         if (wgs) newCentroidPoints.push({ x: wgs.x, y: wgs.y, colorIdx: vi })
                     }
 
-                    // Contour → sommets WGS84
+                    // Contour → sommets WGS84 → collecte pour regroupement ultérieur
                     var verts = extractWgs84Vertices(geom, selectedLayer.crs)
-                    if (verts && verts.length >= 3) verticesDict[featIdx] = verts
-                    featIdx++
+                    if (verts && verts.length >= 3) entries.push({ verts: verts })
                 }
             } catch(e) {
                 console.log("computeCentroids[" + vi + "]: " + e)
             }
 
-            // Assigner contours au renderer de cet index
-            if (oRend) buildAndAssignOutline(verticesDict, oRend)
+            buildOutlineEntriesForGroup(entries, vi, newOutlinePolygons)
         }
 
         centroidPoints = newCentroidPoints
+        outlinePolygons = newOutlinePolygons
         buildClusters()
         if (mapCanvas) mapCanvas.refresh()
     }
@@ -198,12 +261,7 @@ Item {
     function clearCentroids() {
         centroidPoints = []
         clusteredPoints = []
-        var empty = GeometryUtils.createGeometryFromWkt("LINESTRING(0 0, 0.000001 0.000001)")
-        if (!empty) return
-        for (var i = 0; i < maxFilterValues; i++) {
-            var or = outlineRenderers.itemAt(i)
-            if (or) or.geometryWrapper.qgsGeometry = empty
-        }
+        outlinePolygons = []
     }
 
     function buildClusters() {
@@ -365,27 +423,106 @@ Item {
         return verts
     }
 
-    function buildAndAssignOutline(verticesDict, renderer) {
-        var empty = GeometryUtils.createGeometryFromWkt("LINESTRING(0 0, 0.000001 0.000001)")
-        var polygons = []
-        for (var fid in verticesDict) {
-            var verts = verticesDict[fid]
-            if (!verts || verts.length < 3) continue
-            var ring = verts.map(function(v) { return v.x.toFixed(6) + " " + v.y.toFixed(6) })
-            var first = verts[0], last = verts[verts.length - 1]
-            if (first.x !== last.x || first.y !== last.y)
-                ring.push(first.x.toFixed(6) + " " + first.y.toFixed(6))
-            polygons.push("((" + ring.join(",") + "))")
+    // --- Détection de conflit pour fusion sûre des contours ---
+    // Deux anneaux qui partagent un sommet (entités adjacentes qui se touchent)
+    // produisent un MULTIPOLYGON invalide (auto-intersection) que QField ≥4.2.9
+    // refuse de dessiner. On ne fusionne que les anneaux sans sommet commun.
+
+    function ringBBox(verts) {
+        var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+        for (var i = 0; i < verts.length; i++) {
+            var v = verts[i]
+            if (v.x < minX) minX = v.x
+            if (v.x > maxX) maxX = v.x
+            if (v.y < minY) minY = v.y
+            if (v.y > maxY) maxY = v.y
         }
-        if (polygons.length === 0) {
-            if (empty) renderer.geometryWrapper.qgsGeometry = empty
-            return
+        return { minX: minX, minY: minY, maxX: maxX, maxY: maxY }
+    }
+
+    function bboxOverlap(a, b, eps) {
+        eps = eps || 1e-6
+        return a.minX <= b.maxX + eps && a.maxX >= b.minX - eps &&
+               a.minY <= b.maxY + eps && a.maxY >= b.minY - eps
+    }
+
+    function ringsShareVertex(vertsA, vertsB, eps) {
+        eps = eps || 1e-6
+        for (var i = 0; i < vertsA.length; i++) {
+            for (var j = 0; j < vertsB.length; j++) {
+                if (Math.abs(vertsA[i].x - vertsB[j].x) < eps &&
+                    Math.abs(vertsA[i].y - vertsB[j].y) < eps) {
+                    return true
+                }
+            }
         }
-        var wkt = polygons.length === 1
-            ? "POLYGON" + polygons[0]
-            : "MULTIPOLYGON(" + polygons.join(",") + ")"
-        var geom = GeometryUtils.createGeometryFromWkt(wkt)
-        if (geom) renderer.geometryWrapper.qgsGeometry = geom
+        return false
+    }
+
+    // entries: [{verts: [...]}] → { isolated: [indices], mergeable: [indices] }
+    function groupRingsForMerge(entries) {
+        var n = entries.length
+        var bboxes = entries.map(function(e) { return ringBBox(e.verts) })
+        var hasConflict = new Array(n).fill(false)
+        for (var i = 0; i < n; i++) {
+            for (var j = i + 1; j < n; j++) {
+                if (!bboxOverlap(bboxes[i], bboxes[j])) continue
+                if (ringsShareVertex(entries[i].verts, entries[j].verts)) {
+                    hasConflict[i] = true
+                    hasConflict[j] = true
+                }
+            }
+        }
+        var isolated = [], mergeable = []
+        for (var i = 0; i < n; i++) {
+            if (hasConflict[i]) isolated.push(i)
+            else mergeable.push(i)
+        }
+        return { isolated: isolated, mergeable: mergeable }
+    }
+
+    // Construit les entrées finales {colorIdx, geom} pour une valeur de filtre :
+    // un seul MULTIPOLYGON pour les anneaux sans conflit, un POLYGON par anneau isolé.
+    function buildOutlineEntriesForGroup(entries, colorIdx, targetArray) {
+        if (entries.length === 0) return
+        var grouped = groupRingsForMerge(entries)
+
+        if (grouped.mergeable.length === 1) {
+            // Un seul anneau mergeable : autant le traiter comme isolé (POLYGON simple)
+            grouped.isolated.push(grouped.mergeable[0])
+            grouped.mergeable = []
+        }
+
+        if (grouped.mergeable.length > 1) {
+            var polygons = grouped.mergeable.map(function(idx) {
+                var verts = entries[idx].verts
+                var ring = verts.map(function(v) { return v.x.toFixed(6) + " " + v.y.toFixed(6) })
+                var first = verts[0], last = verts[verts.length - 1]
+                if (first.x !== last.x || first.y !== last.y) {
+                    ring.push(first.x.toFixed(6) + " " + first.y.toFixed(6))
+                }
+                return "((" + ring.join(",") + "))"
+            })
+            var wkt = "MULTIPOLYGON(" + polygons.join(",") + ")"
+            var geom = GeometryUtils.createGeometryFromWkt(wkt)
+            if (geom) targetArray.push({ colorIdx: colorIdx, geom: geom })
+        }
+
+        for (var k = 0; k < grouped.isolated.length; k++) {
+            var verts = entries[grouped.isolated[k]].verts
+            var geom2 = buildPolygonGeometry(verts)
+            if (geom2) targetArray.push({ colorIdx: colorIdx, geom: geom2 })
+        }
+    }
+
+    function buildPolygonGeometry(verts) {
+        if (!verts || verts.length < 3) return null
+        var ring = verts.map(function(v) { return v.x.toFixed(6) + " " + v.y.toFixed(6) })
+        var first = verts[0], last = verts[verts.length - 1]
+        if (first.x !== last.x || first.y !== last.y)
+            ring.push(first.x.toFixed(6) + " " + first.y.toFixed(6))
+        var wkt = "POLYGON((" + ring.join(",") + "))"
+        return GeometryUtils.createGeometryFromWkt(wkt)
     }
 
     // === FONCTIONS UTILITAIRES ===
@@ -520,21 +657,28 @@ Item {
 
     // === FONCTIONS FILTRE ===
     function openFilterUI() {
-        if (!filterActive) {
-            showAllFeatures = false
-            showFeatureList = false
-            if (showListCheck) showListCheck.checked = false
-            savedLayerName = ""; savedFieldName = ""; savedFilterText = ""; savedExpr = ""
-            useListOffset = false; isReturnAction = false
-            if (valueField) { valueField.text = ""; valueField.model = [] }
-            selectedLayer = null; pendingFormLayer = null; pendingFormExpr = ""
-            sourceIsPoints = false
-        } else {
-            if (valueField) valueField.text = savedFilterText
+    updateLayers()
+    
+    // Si on a des valeurs sauvegardées, on essaie de sélectionner la couche et le champ
+    if (savedLayerName) {
+        var layer = getLayerByName(savedLayerName)
+        if (layer) {
+            selectedLayer = layer
+            checkSourceGeometryType()
+            updateFields()
+            
+            // On positionne le sélecteur de champ
+            if (savedFieldName) {
+                var fields = getFields(selectedLayer)
+                var idx = fields.indexOf(savedFieldName)
+                fieldSelector.currentIndex = idx >= 0 ? idx : 0
+            }
         }
-        updateLayers()
-        searchDialog.open()
     }
+    
+    if (valueField) valueField.text = savedFilterText
+    searchDialog.open()
+}
 
     function removeAllFilters() {
         if (!sourceIsPoints) clearCentroids()
@@ -563,6 +707,10 @@ Item {
         updateApplyState() 
         if (drivemeTool.isNavigating) drivemeTool.stopNavigation()
         mainWindow.displayToast(tr("Filter deleted"))
+        savedLayerName = ""
+        savedFieldName = ""
+        savedFilterText = ""
+        filterActive = false
     }
 
     function performZoom() {
@@ -636,13 +784,21 @@ Item {
     }
 
     function applyFilter(allowFormOpen, doZoom) {
-        if (!selectedLayer || !fieldSelector.currentText || !valueField.text) return
+        // Sécurité : on prend soit le texte du sélecteur, soit la valeur sauvegardée
+        var fieldToUse = (fieldSelector.currentText && fieldSelector.currentText !== tr("Select a field")) 
+                         ? fieldSelector.currentText 
+                         : savedFieldName
+        
+        // Si on n'a toujours rien, là on peut s'arrêter
+        if (!selectedLayer || !fieldToUse || !valueField.text) return
+        
         if (allowFormOpen === undefined) allowFormOpen = true
         if (doZoom === undefined) doZoom = true
 
         try {
-            savedLayerName = layerSelector.currentText
-            savedFieldName = fieldSelector.currentText
+            // Mise à jour des variables de persistance pour être sûr
+            savedLayerName = selectedLayer.name
+            savedFieldName = fieldToUse
             savedFilterText = valueField.text
 
             if (!sourceIsPoints) clearCentroids()
@@ -665,7 +821,7 @@ Item {
                 pendingFormLayer = selectedLayer; pendingFormExpr = expr; openListTimer.restart()
             }
 
-            if (doZoom) { useListOffset = true; isReturnAction = false; zoomTimer.start() }
+            if (doZoom && doAutoZoom) { useListOffset = true; isReturnAction = false; zoomTimer.start() }
             filterActive = true
 
             if (!sourceIsPoints) computeCentroidsTimer.restart()
@@ -790,6 +946,7 @@ Item {
             "Show feature list": "Afficher liste des entités",
             "Apply filter": "Appliquer le filtre",
             "Filter & Drive me": "Appliquer le filtre & Montre-moi la route",
+            "Zoom to filtered geometries": "Zoomer sur les géométries filtrées",
             "Delete filter": "Supprimer le filtre"
 
         }
@@ -818,16 +975,20 @@ Item {
         }
     }
 
-    // === RENDERERS CONTOURS — un par valeur de filtre ===
+    // === RENDERERS CONTOURS — un par polygone individuel (pas par valeur de filtre) ===
+    // QField ≥4.2.9 ne classe plus correctement les MultiPolygon (polylinesType tombe à
+    // UnknownGeometry, donc polylines.length=0, donc rien n'est dessiné). On instancie
+    // désormais un GeometryRenderer par polygone simple, coloré via colorIdx.
     Repeater {
         id: outlineRenderers
-        model: filterToolRoot.maxFilterValues
+        model: filterToolRoot.outlinePolygons
         QFieldItems.GeometryRenderer {
             parent: mapCanvas
             mapSettings: mapCanvas.mapSettings
             geometryWrapper.crs: CoordinateReferenceSystemUtils.wgs84Crs()
+            geometryWrapper.qgsGeometry: modelData.geom
             lineWidth: 2
-            color: filterToolRoot.colorPalette[index]
+            color: filterToolRoot.colorPalette[modelData.colorIdx]
             opacity: filterToolRoot.filterActive && !filterToolRoot.sourceIsPoints ? 0.75 : 0.0
         }
     }
@@ -958,40 +1119,64 @@ Item {
     }
 
     Dialog {
-        id: searchDialog
-        parent: mainWindow.contentItem
-        modal: true
-        width: Math.min(mainWindow.width * 0.9, 450)
-        x: (mainWindow.width - width) / 2
-        y: isLandscape ? (mainWindow.height - height) / 2 : (mainWindow.height - height) / 2 -65
-        background: Rectangle { color: "white"; border.color: Theme.mainColor; border.width: 2; radius: 8 }
+    id: searchDialog
+    parent: mainWindow.contentItem
+    modal: true
 
-        property bool isLandscape: mainWindow.width > mainWindow.height
-        property real scaleFactor: isLandscape
-            ? Math.min(1.0, mainWindow.height * 1.00 / Math.max(innerCol.implicitHeight + 56, 1))
-            : 1.0
+    property bool isLandscape: mainWindow.width > mainWindow.height
 
-        scale: scaleFactor
-        topPadding:    isLandscape ? 10 : 10
-        bottomPadding: isLandscape ? 8 : 10
-        leftPadding:   isLandscape ? 10 : 0
-        rightPadding:  isLandscape ? 10 : 0
+    width: Math.min(mainWindow.width * 0.95, 450)
+    height: Math.min(innerCol.implicitHeight + 30, mainWindow.height * 0.92)
 
-        contentItem: ColumnLayout {
-            spacing: 0
+    x: (mainWindow.width - width) / 2
+    y: (mainWindow.height - height) / 2
 
-            MouseArea { Layout.fillWidth: true; Layout.fillHeight: true; z: -1; onClicked: { if(valueField.focus) {valueField.focus=false; suggestionPopup.close()}; mouse.accepted=false } }
+    background: Rectangle {
+        color: "white"
+        border.color: Theme.mainColor
+        border.width: 2
+        radius: 8
+    }
 
-            ColumnLayout {
-                id: innerCol
+    contentItem: ScrollView {
+        id: scrollView
+        anchors.fill: parent
+        clip: true
+
+        topPadding: 10
+        bottomPadding: 10
+        leftPadding: 20
+        rightPadding: 20
+
+
+        ColumnLayout {
+            id: innerCol
+            width: scrollView.availableWidth
+
+            spacing: 10
+
+            MouseArea {
                 Layout.fillWidth: true
-                Layout.topMargin: 6
-                Layout.leftMargin: 12
-                Layout.rightMargin: 12
-                Layout.bottomMargin: 6
-                spacing: 10
+                Layout.fillHeight: true
+                z: -1
 
-                Label { text: tr("FILTER"); font.bold: true; font.pointSize: 18; horizontalAlignment: Text.AlignHCenter; Layout.fillWidth: true }
+                onClicked: {
+                    if (valueField.focus) {
+                        valueField.focus = false
+                        suggestionPopup.close()
+                    }
+                    mouse.accepted = false
+                }
+            }
+
+            Label {
+                text: tr("FILTER")
+                font.bold: true
+                font.pointSize: 18
+                horizontalAlignment: Text.AlignHCenter
+                Layout.fillWidth: true
+            }
+
 
                 QfComboBox {
                     id: layerSelector; Layout.fillWidth: true; Layout.preferredHeight: 35; model: []
@@ -1011,7 +1196,7 @@ Item {
                     placeholderText: tr("Type to search (ex: Paris; Lyon)...")
                     property var model: []; property bool isLoading: false
                     onActiveFocusChanged: { if (activeFocus && text.trim().length > 0) { if (model.length>0) suggestionPopup.open(); else performDynamicSearch() } }
-                    onTextEdited: { if(text.trim().length>0) searchDelayTimer.restart(); else {searchDelayTimer.stop(); suggestionPopup.close()} updateApplyState() }
+                    onTextChanged: { if(text.trim().length>0) searchDelayTimer.restart(); else {searchDelayTimer.stop(); suggestionPopup.close()} updateApplyState() }
                     Popup {
                         id: suggestionPopup; y: valueField.height; width: valueField.width; height: Math.min(listView.contentHeight+10, 200); padding: 1
                         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
@@ -1044,6 +1229,15 @@ Item {
                         id: showListCheck; text: tr("Show feature list"); checked: showFeatureList; Layout.fillWidth: true
                         onToggled: { showFeatureList = checked; if (filterActive && checked) applyFilter(true, false) }
                     }
+
+                    CheckBox {
+                     id: autoZoomCheck
+                     text: tr("Zoom to filtered geometries")
+                     checked: filterToolRoot.doAutoZoom
+                     Layout.fillWidth: true
+                     onToggled: filterToolRoot.doAutoZoom = checked
+}
+
                 }
 
                 RowLayout {
