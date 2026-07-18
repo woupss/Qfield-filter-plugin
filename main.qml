@@ -1143,6 +1143,9 @@ Item {
         anchors.fill: parent
         clip: true
 
+        ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+        contentWidth: availableWidth
+
         topPadding: 10
         bottomPadding: 10
         leftPadding: 20
