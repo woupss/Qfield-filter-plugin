@@ -18,9 +18,6 @@ https://github.com/woupss/qfield-filter-plugin/releases/latest
 <img width="1080" height="2400" alt="1000125578" src="https://github.com/user-attachments/assets/24d0b990-58d5-47aa-bdd7-4301572a2b83" />
 
 
-
-![Screenshot_2026-04-12-02-37-35-851_ch opengis qfield](https://github.com/user-attachments/assets/2ae7da74-771b-475e-a23e-5880d95cb8f4)
-
 ![Screenshot_2026-04-12-02-38-27-030_ch opengis qfield-edit](https://github.com/user-attachments/assets/3816850d-5776-4128-9b48-192b59298295)
 
 ![Screenshot_2026-04-12-02-40-32-904_ch opengis qfield-edit](https://github.com/user-attachments/assets/2f962598-b3d2-4de0-a985-64820215f643)
