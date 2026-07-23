@@ -16,6 +16,20 @@ Item {
     // --- VARIABLES ---
     property var unvisitedPoints: []   
     property var currentTarget: null   
+
+    
+
+    property var navLayer: null
+
+
+    onCurrentTargetChanged: {
+    if (navLayer) {
+        navLayer.removeSelection()
+        if (currentTarget) navLayer.select(currentTarget.featureId)
+    }
+} 
+
+
     property int totalPointsCount: 0
     property bool isNavigating: false
     property bool isPaused: false
@@ -146,12 +160,12 @@ QFieldItems.GeometryRenderer {
 }
 
     QFieldItems.GeometryRenderer {
-        id: onRouteRenderer
+        id: onRouteRenderer //point clignotant sur le trajet 
         parent: mapCanvas
         mapSettings: mapCanvas.mapSettings
         geometryWrapper.crs: CoordinateReferenceSystemUtils.wgs84Crs()
         lineWidth: 4
-        color: navColorSettings.targetColor
+        color: "yellow" // couleur du point clignotant sur le trajet avant c'était navColorSettings.targetColor (cyan)
         opacity: 1.0
         SequentialAnimation on opacity {
             loops: Animation.Infinite
@@ -203,35 +217,36 @@ QFieldItems.GeometryRenderer {
         mapPoint: targetTransformer.projectedPosition
     }
     Item {
-        id: blinkingTarget
+        id: blinkingTarget  //POINT CIBLE CLIGNOTANT
         parent: mapCanvas
         visible: isNavigating && currentTarget !== null && navState !== "RETURNING_TO_CAR"
         x: targetScreenPos.screenPoint.x - width / 2
         y: targetScreenPos.screenPoint.y - height / 2
         width: 50; height: 50
-        Rectangle { anchors.centerIn: parent; width: 16; height: 16; radius: 8; color: "#ff00ff"; border.color: "yellow"; border.width: 2 }
+        Rectangle { anchors.centerIn: parent; width: 20; height: 20; radius: 10; color: "yellow"; border.color: "#ff00ff"; border.width: 2 }
         Rectangle {
             anchors.centerIn: parent; width: parent.width; height: parent.height; radius: width / 2; color: "transparent"; border.color: "yellow"; border.width: 3
             SequentialAnimation on scale { loops: Animation.Infinite; running: blinkingTarget.visible; NumberAnimation { from: 0.2; to: 1.0; duration: 1200; easing.type: Easing.OutQuad } }
-            SequentialAnimation on opacity { loops: Animation.Infinite; running: blinkingTarget.visible; NumberAnimation { from: 1.0; to: 0.0; duration: 1200; easing.type: Easing.OutQuad } }
+            SequentialAnimation on opacity { loops: Animation.Infinite; running: blinkingTarget.visible; NumberAnimation { from: 1.0; to: 0.2; duration: 1200; easing.type: Easing.OutQuad } } 
         }
     }
-
+   // clignotement polygone sous le point cible
     QFieldItems.GeometryRenderer {
         id: polygonCenterRenderer
         parent: mapCanvas
         mapSettings: mapCanvas.mapSettings
         geometryWrapper.crs: CoordinateReferenceSystemUtils.wgs84Crs()
-        lineWidth: 4
-        color: "cyan" // Fuschia — centre du polygone lié à la cible rouge courante
+        lineWidth: 8  // 4
+        color: "yellow" // couleur de clignotement du polygone cible
         opacity: 1.0
         SequentialAnimation on opacity {
             loops: Animation.Infinite
             running: isNavigating
-            NumberAnimation { from: 1.0; to: 0.55; duration: 500; easing.type: Easing.InOutQuad }
-            NumberAnimation { from: 0.55; to: 1.0; duration: 500; easing.type: Easing.InOutQuad }
+            NumberAnimation { from: 1.0; to: 0.50; duration: 500; easing.type: Easing.InOutQuad }
+            NumberAnimation { from: 0.50; to: 1.0; duration: 500; easing.type: Easing.InOutQuad }
         }
     }
+
 
     CoordinateTransformer {
         id: carTransformer
@@ -572,11 +587,17 @@ QFieldItems.GeometryRenderer {
         polygonCenters = {}
         traveledCoords = []
 
+        if (navLayer) navLayer.removeSelection()
+        navLayer = null
+
         mapCanvas.refresh()
     }
 
     function startNavigationProcess(layer) {
         try {
+
+            navLayer = layer
+
             chainWalkThreshold = 50
 
             let preSelected = layer.selectedFeatures()
@@ -609,7 +630,7 @@ QFieldItems.GeometryRenderer {
                         let pt = GeometryUtils.centroid(g)
                         if (pt) {
                             let wgs = GeometryUtils.reprojectPointToWgs84(pt, layer.crs)
-                            if (wgs) rawPoints.push({ id: i, x: wgs.x, y: wgs.y })
+                            if (wgs) rawPoints.push({ id: i, featureId: feats[i].id, x: wgs.x, y: wgs.y })
                         }
                     }
                 }
@@ -634,7 +655,7 @@ QFieldItems.GeometryRenderer {
             if (!centPt) continue
             let wgsFallback = GeometryUtils.reprojectPointToWgs84(centPt, layer.crs)
             if (!wgsFallback) continue
-            let fallback = { id: i, x: wgsFallback.x, y: wgsFallback.y, onRoute: false }
+            let fallback = { id: i, featureId: feats[i].id, x: wgsFallback.x, y: wgsFallback.y, onRoute: false }
 
             try {
                 let innerPt = GeometryUtils.pointOnSurface ? GeometryUtils.pointOnSurface(g) : null
@@ -697,7 +718,7 @@ QFieldItems.GeometryRenderer {
 
                 let isOnRoute = hasRoute ? (minDistToRouteLine(bestPt, lastRouteCoords) < 20) : false
                 let isIsolated = hasRoute && bestDist > 200
-                rawPoints.push({ id: i, x: bestPt.x, y: bestPt.y, onRoute: isOnRoute, isolated: isIsolated })
+                rawPoints.push({ id: i, featureId: feats[i].id, x: bestPt.x, y: bestPt.y, onRoute: isOnRoute, isolated: isIsolated })
 
             } catch(e) {
                 rawPoints.push(fallback)
@@ -859,7 +880,7 @@ QFieldItems.GeometryRenderer {
             if (d < bestDist) { bestDist = d; bestPt = verts[k] }
         }
         if (!bestPt) return pt
-        return { id: pt.id, x: bestPt.x, y: bestPt.y, onRoute: bestDist < 20, isolated: pt.isolated }
+        return { id: pt.id, featureId: pt.featureId, x: bestPt.x, y: bestPt.y, onRoute: bestDist < 20, isolated: pt.isolated }  
     }
 
     // --- 8. BOUCLE PRINCIPALE ---
@@ -869,16 +890,14 @@ QFieldItems.GeometryRenderer {
         let myPos = getCurrentGpsPosition()
         if (!myPos) myPos = getCrosshairPosition()
         if (!myPos) return
-//========WITH CROSSHAIR CALCULATION============
-      //  let crosshairPos = getCrosshairPosition()
-      //  let routePos = (crosshairPos && getDistMeters(myPos, crosshairPos) > 20) ? crosshairPos : myPos
-//===========================================
+//-------SANS CALCUL CROSSHAIR----------
+        let crosshairPos = getCrosshairPosition()
+        let crosshairOnGps = !crosshairPos || getDistMeters(myPos, crosshairPos) <= 20
+        let routePos = myPos  // itinéraire toujours calculé depuis la position GPS réelle
+//-------AVEC CALCUL CROSSHAIR----------
+     //   let crosshairPos = getCrosshairPosition()
+    //    let routePos = (crosshairPos && getDistMeters(myPos, crosshairPos) > 20) ? crosshairPos : myPos
 
-//========WITHOUT CROSSHAIR CALCULATION========
-         let crosshairPos = getCrosshairPosition()
-let crosshairOnGps = !crosshairPos || getDistMeters(myPos, crosshairPos) <= 20
-let routePos = myPos  
-//=============================================
         // --- ENREGISTREMENT DU TRAJET PARCOURU ---
         if (navState === "DRIVING") {
             let lastTraveled = traveledCoords.length > 0 ? traveledCoords[traveledCoords.length - 1] : null
@@ -1113,11 +1132,21 @@ let routePos = myPos
     showHudMessage(tr("En route."))
     return
 }
-            if (!lastFootPos && crosshairOnGps) {
+
+//--------AVEC CALCUL DEPUIS CROSSHAIR--------
+       //     if (!lastFootPos) {
                 // Premier tick : lancer fetchFootRoute (qui dessine direct line immédiatement)
                 // puis effacer carRenderer seulement après
-                lastFootPos = routePos
-                fetchFootRoute(routePos, parkedLocation)
+            //    lastFootPos = routePos
+             //   fetchFootRoute(routePos, parkedLocation)
+//-------------------------------------------
+
+//--------SANS CALCUL DEPUIS CROSSHAIR--------
+              if (!lastFootPos && crosshairOnGps) {
+    lastFootPos = routePos
+    fetchFootRoute(routePos, parkedLocation)
+//-------------------------------------------
+
              //   clearGeometry(carRenderer)
                 needsRefresh = true
             } else if (lastFootRouteCoords) {
@@ -1150,11 +1179,21 @@ let routePos = myPos
                 }
             }
 
+//--------AVEC CALCUL DEPUIS CROSSHAIR--------
             // Effacer le tracé voiture une seule fois à l'entrée dans cet état
-            if (!lastFootPos && crosshairOnGps) {
+         //   if (!lastFootPos) {
            //     clearGeometry(carRenderer)
-                fetchFootRoute(routePos, currentTarget)
+            //    fetchFootRoute(routePos, currentTarget)
+             //   lastFootPos = routePos
+//---------------------------------------------
+
+//--------SANS CALCUL DEPUIS CROSSHAIR--------
+              if (!lastFootPos && crosshairOnGps) {
                 lastFootPos = routePos
+                fetchFootRoute(routePos, currentTarget)
+//----------------------------------------------
+
+
                 needsRefresh = true
             } else if (lastFootRouteCoords) {
                 let distFromRoute = getDistMeters(routePos,
@@ -1177,17 +1216,21 @@ let routePos = myPos
             if (lastRouteCoords && lastRouteCoords.length >= 2) {
                 if (trimRouteToCurrentPos(routePos)) needsRefresh = true
             }
-//==========WITH CROSSHAIR CALCULATION==========
-         //   if (!lastProcessPos || getDistMeters(routePos, lastProcessPos) > 40) {
+
+//-------SANS CALCUL DEPUIS CROSSHAIR -----------
+           if (crosshairOnGps && (!lastProcessPos || getDistMeters(routePos, lastProcessPos) > 40)) {
+               lastProcessPos = routePos
+               fetchOsrmRoute(routePos, currentTarget)
+}
+
+
+//-------AVEC CALCUL DEPUIS CROSSHAIR -----------
+
+          //  if (!lastProcessPos || getDistMeters(routePos, lastProcessPos) > 40) {
             //    lastProcessPos = routePos
             //    fetchOsrmRoute(routePos, currentTarget)
           //  }
-//==========WITHOUT CROSSHAIR CALCULATION=======
-           if (crosshairOnGps && (!lastProcessPos || getDistMeters(routePos, lastProcessPos) > 40)) {
-    lastProcessPos = routePos
-    fetchOsrmRoute(routePos, currentTarget)
-}
-//==========================================
+//------------------------------------------------
         }
 
         if (needsRefresh) mapCanvas.refresh()
@@ -1327,6 +1370,7 @@ let roadPenalty = 0
                         if (pt) {
                             bestTarget = { 
                                 id: pt.id, 
+                                featureId: pt.featureId,
                                 x: b.vert.x, 
                                 y: b.vert.y, 
                                 onRoute: b.roadDist < 30, // Taggué comme "accessible voiture" si < 30m
@@ -1682,7 +1726,7 @@ lastRouteCoords = coords
             if (!bestPt) return pt
 
             let isOnRoute = minDistToRouteLine(bestPt, refCoords) < 20
-            return { id: pt.id, x: bestPt.x, y: bestPt.y, onRoute: isOnRoute, isolated: pt.isolated }
+            return { id: pt.id, featureId: pt.featureId, x: bestPt.x, y: bestPt.y, onRoute: isOnRoute, isolated: pt.isolated }
         })
 
         unvisitedPoints = updated
@@ -1732,6 +1776,7 @@ lastRouteCoords = coords
             if (idx >= 0) {
                 rawPoints[idx] = {
                     id: iso.id,
+                    featureId: iso.featureId,
                     x: bestIsoVert.x,
                     y: bestIsoVert.y,
                     onRoute: false,
@@ -1756,7 +1801,8 @@ lastRouteCoords = coords
         return true
     }
 
-    // --- Rendu fuschia ---
+
+
     function updatePolygonCenterRenderer() {
         // Si une cible vient d'être validée, couper brièvement le renderer
         // pour forcer le redémarrage de l'animation sur la nouvelle géométrie
@@ -1770,10 +1816,10 @@ lastRouteCoords = coords
         }
         let empty = GeometryUtils.createGeometryFromWkt("LINESTRING(0 0, 0.000001 0.000001)")
         let candidates = unvisitedPoints.filter(function(p) { return p.onRoute })
-        if (navState === "WALKING_TO_POI" && currentTarget &&
-            !candidates.find(function(p) { return p.id === currentTarget.id })) {
-            candidates = candidates.concat([currentTarget])
-        }
+if (currentTarget &&
+    !candidates.find(function(p) { return p.id === currentTarget.id })) {
+    candidates = candidates.concat([currentTarget])
+}
         if (candidates.length === 0) {
             if (empty) polygonCenterRenderer.geometryWrapper.qgsGeometry = empty
             return
