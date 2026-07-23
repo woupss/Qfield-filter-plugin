@@ -156,7 +156,7 @@ Item {
     }
 
     //======= TIMERS DE RESTAURATION =========
-    Timer {
+        Timer {
         id: restoreTimer
         property int attempts: 0
         interval: 1000
@@ -174,14 +174,24 @@ Item {
                 if (idx >= 0) fieldSelector.currentIndex = idx
                 valueField.text = savedFilterText
                 updateApplyState()
+                
+                // 1. Application du filtre
                 applyFilter(false, doAutoZoom)
+                
+                // 2. AJOUT : Si c'est une couche de points, on supprime la sélection jaune
+                if (sourceIsPoints && selectedLayer) {
+                    selectedLayer.removeSelection()
+                    selectedLayer.triggerRepaint()
+                    mapCanvas.refresh()
+                }
             } else if (attempts >= 45) {
                 stop()
             }
         }
     }
 
-    Timer {
+
+        Timer {
         id: restoreTimer2
         property int attempts: 0
         interval: 1000
@@ -199,12 +209,22 @@ Item {
                 if (idx >= 0) fieldSelector2.currentIndex = idx
                 valueField2.text = savedFilterText2
                 updateApplyState2()
+                
+                // 1. Application du filtre
                 applyFilter2(false, doAutoZoom2)
+                
+                // 2. AJOUT : Si c'est une couche de points, on supprime la sélection jaune
+                if (sourceIsPoints2 && selectedLayer2) {
+                    selectedLayer2.removeSelection()
+                    selectedLayer2.triggerRepaint()
+                    mapCanvas.refresh()
+                }
             } else if (attempts >= 45) {
                 stop()
             }
         }
     }
+
 
     // === BOUTON TOOLBAR ===
     QfToolButton {
