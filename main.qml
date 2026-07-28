@@ -23,6 +23,10 @@ Item {
     // Variables de sélection (Filtre 2)
     property var selectedLayer2: null
 
+    // Suivi de la visibilité des couches (légende) pour lier les switches de filtre
+    // à l'affichage réel des couches — sens unique : visibilité couche → état switch
+    property var layerVisibilitySnapshot: ({})
+
     // Détection type source
     property bool sourceIsPoints: false
     property bool sourceIsPoints2: false
@@ -35,6 +39,10 @@ Item {
     // Persistance - Filtre 1
     property bool showAllFeatures: false
     property bool showFeatureList: false
+    property bool filter1Enabled: true 
+    // Coloriage indépendant : garde le filtrage (subsetString) mais masque les
+    // contours/points colorés au profit de la symbologie native de la couche
+    property bool colorize1Enabled: true
     property string savedLayerName: ""
     property string savedFieldName: ""
     property string savedFilterText: ""
@@ -43,6 +51,8 @@ Item {
     // Persistance - Filtre 2
     property bool showAllFeatures2: false
     property bool showFeatureList2: false
+    property bool filter2Enabled: true 
+    property bool colorize2Enabled: true
     property string savedLayerName2: ""
     property string savedFieldName2: ""
     property string savedFilterText2: ""
@@ -115,6 +125,8 @@ Item {
         property alias savedFilterText: filterToolRoot.savedFilterText
         property alias showAllFeatures: filterToolRoot.showAllFeatures
         property alias showFeatureList: filterToolRoot.showFeatureList
+        property alias filter1Enabled: filterToolRoot.filter1Enabled 
+        property alias colorize1Enabled: filterToolRoot.colorize1Enabled
         property alias doAutoZoom: filterToolRoot.doAutoZoom
         property alias filterActive: filterToolRoot.filterActive
 
@@ -124,6 +136,8 @@ Item {
         property alias savedFilterText2: filterToolRoot.savedFilterText2
         property alias showAllFeatures2: filterToolRoot.showAllFeatures2
         property alias showFeatureList2: filterToolRoot.showFeatureList2
+        property alias filter2Enabled: filterToolRoot.filter2Enabled 
+        property alias colorize2Enabled: filterToolRoot.colorize2Enabled
         property alias doAutoZoom2: filterToolRoot.doAutoZoom2
         property alias filterActive2: filterToolRoot.filterActive2
     }
@@ -153,10 +167,53 @@ Item {
         if (filterActive2 && savedLayerName2 && savedFieldName2 && savedFilterText2) {
             restoreTimer2.start()
         }
+
+        layerVisibilitySnapshot = snapshotLayerVisibility()
+    }
+
+    // === SUIVI VISIBILITÉ DES COUCHES (légende) → SWITCHES DE FILTRE ===
+    // Sens unique voulu : quand une couche est (dés)affichée dans la légende,
+    // le switch du filtre correspondant suit automatiquement. L'inverse n'est
+    // jamais fait ici — activer/désactiver un switch ne touche jamais la légende.
+    function snapshotLayerVisibility() {
+        let snap = ({})
+        if (!flatLayerTree) return snap
+        let count = flatLayerTree.rowCount()
+        for (let i = 0; i < count; i++) {
+            let idx = flatLayerTree.index(i, 0)
+            if (flatLayerTree.data(idx, FlatLayerTreeModel.Type) === FlatLayerTreeModel.Layer) {
+                let name = flatLayerTree.data(idx, FlatLayerTreeModel.Name)
+                snap[name] = flatLayerTree.data(idx, FlatLayerTreeModel.Visible)
+            }
+        }
+        return snap
+    }
+
+    Connections {
+        target: flatLayerTree
+        ignoreUnknownSignals: true
+        function onDataChanged() {
+            let newSnap = filterToolRoot.snapshotLayerVisibility()
+            for (let name in newSnap) {
+                let wasVisible = filterToolRoot.layerVisibilitySnapshot[name]
+                let isVisible = newSnap[name]
+                if (wasVisible === isVisible) continue
+
+                // Filtre 1 : ne suit que si ce nom correspond à la couche sélectionnée pour ce filtre
+                if (filterToolRoot.selectedLayer && filterToolRoot.selectedLayer.name === name) {
+                    filterToolRoot.filter1Enabled = isVisible
+                }
+                // Filtre 2 : idem, indépendamment
+                if (filterToolRoot.selectedLayer2 && filterToolRoot.selectedLayer2.name === name) {
+                    filterToolRoot.filter2Enabled = isVisible
+                }
+            }
+            filterToolRoot.layerVisibilitySnapshot = newSnap
+        }
     }
 
     //======= TIMERS DE RESTAURATION =========
-        Timer {
+    Timer {
         id: restoreTimer
         property int attempts: 0
         interval: 1000
@@ -175,8 +232,10 @@ Item {
                 valueField.text = savedFilterText
                 updateApplyState()
                 
-                // 1. Application du filtre
-                applyFilter(false, doAutoZoom)
+                // 1. Application du filtre (uniquement si activé par le switch)
+                if (filter1Enabled) {
+                    applyFilter(false, doAutoZoom)
+                }
                 
                 // 2. AJOUT : Si c'est une couche de points, on supprime la sélection jaune
                 if (sourceIsPoints && selectedLayer) {
@@ -190,8 +249,7 @@ Item {
         }
     }
 
-
-        Timer {
+    Timer {
         id: restoreTimer2
         property int attempts: 0
         interval: 1000
@@ -210,8 +268,10 @@ Item {
                 valueField2.text = savedFilterText2
                 updateApplyState2()
                 
-                // 1. Application du filtre
-                applyFilter2(false, doAutoZoom2)
+                // 1. Application du filtre (uniquement si activé par le switch 2)
+                if (filter2Enabled) {
+                    applyFilter2(false, doAutoZoom2)
+                }
                 
                 // 2. AJOUT : Si c'est une couche de points, on supprime la sélection jaune
                 if (sourceIsPoints2 && selectedLayer2) {
@@ -224,7 +284,6 @@ Item {
             }
         }
     }
-
 
     // === BOUTON TOOLBAR ===
     QfToolButton {
@@ -244,7 +303,7 @@ Item {
         onPressed: holdTimer.start()
         onReleased: holdTimer.stop()
 
-                Timer {
+        Timer {
             id: holdTimer
             interval: 500
             repeat: false
@@ -259,11 +318,10 @@ Item {
                 removeAllFilters2()
 
                 // Affiche la notification globale
-                mainWindow.displayToast(tr("Filter 1 and 2 deleted"))
-
-           }
-         }
-       }   
+                mainWindow.displayToast(tr("Filters 1 and 2 deleted"))
+            }
+        }
+    }   
 
     // === LOGIQUE TYPE GÉOMÉTRIE ===
     function checkSourceGeometryType() {
@@ -682,14 +740,14 @@ Item {
         id: computeCentroidsTimer
         interval: 400
         repeat: false
-        onTriggered: { if (!sourceIsPoints) computeCentroids() }
+        onTriggered: { if (!sourceIsPoints && filter1Enabled) computeCentroids() }
     }
 
     Timer {
         id: computeCentroidsTimer2
         interval: 400
         repeat: false
-        onTriggered: { if (!sourceIsPoints2) computeCentroids2() }
+        onTriggered: { if (!sourceIsPoints2 && filter2Enabled) computeCentroids2() }
     }
 
     Timer {
@@ -737,7 +795,6 @@ Item {
         }
     }
 
-
     Timer {
         id: openListTimer; interval: 250; repeat: false
         onTriggered: {
@@ -753,7 +810,7 @@ Item {
     }
 
     // === GESTION FILTRE 1 ===
-        function openFilterUI() {
+    function openFilterUI() {
         updateLayers()
         if (savedLayerName) {
             var layer = getLayerByName(savedLayerName)
@@ -786,15 +843,14 @@ Item {
         }
         if (valueField2) valueField2.text = savedFilterText2
 
-        // --- AJOUT : Réévaluation forcée de l'état des boutons pour les 2 filtres ---
+        // --- Réévaluation forcée de l'état des boutons pour les 2 filtres ---
         updateApplyState()
         updateApplyState2()
 
         searchDialog.open()
     }
 
-
-        function removeAllFilters(silent) {
+    function removeAllFilters(silent) {
         if (!sourceIsPoints) clearCentroids()
         restoreOriginalColors()
         if (selectedLayer) {
@@ -811,12 +867,10 @@ Item {
         updateApplyState()
         if (drivemeTool.isNavigating) drivemeTool.stopNavigation()
         
-        // N'affiche le toast que si silent est false / non défini
         if (!silent) {
             mainWindow.displayToast(tr("Filter 1 deleted"))
         }
     }
-
 
     function removeAllFilters2() {
         if (!sourceIsPoints2) clearCentroids2()
@@ -835,7 +889,7 @@ Item {
         mainWindow.displayToast(tr("Filter 2 deleted"))
     }
 
-        function performZoom() {
+    function performZoom() {
         var activeSelLayer = (searchStack.currentIndex === 1) ? selectedLayer2 : selectedLayer
         if (!activeSelLayer) return
         var bbox = activeSelLayer.boundingBoxOfSelected()
@@ -847,7 +901,6 @@ Item {
             }
         }
 
-        // --- SÉCURITÉ : Si aucune Bounding Box valide n'est trouvée (ex: pas de sélection sur couche de points), ON ABANDONNE LE ZOOM ---
         if (!bbox || isNaN(bbox.xMinimum) || isNaN(bbox.yMinimum) || (bbox.xMinimum === 0 && bbox.xMaximum === 0)) {
             return
         }
@@ -858,7 +911,7 @@ Item {
             bbox.yMinimum -= epsilon; bbox.yMaximum += epsilon
         }
 
-          if (!bbox) return
+        if (!bbox) return
 
         try {
             var destCrs = mapCanvas.mapSettings.destinationCrs
@@ -899,7 +952,6 @@ Item {
 
             mapCanvas.mapSettings.setExtent(finalExtent, true)
 
-            // --- AJOUT : Si c'est une couche de points, on retire la sélection jaune juste après le zoom ---
             var isPoints = (searchStack.currentIndex === 1) ? sourceIsPoints2 : sourceIsPoints
             if (isPoints) {
                 activeSelLayer.removeSelection()
@@ -910,8 +962,18 @@ Item {
         } catch (e) {}
     }
 
+    function applyFilter(allowFormOpen, doZoom) {
+        if (!filter1Enabled) {
+            if (selectedLayer) {
+                selectedLayer.subsetString = ""
+                selectedLayer.removeSelection()
+                selectedLayer.triggerRepaint()
+                mapCanvas.refresh()
+            }
+            filterActive = false
+            return
+        }
 
-        function applyFilter(allowFormOpen, doZoom) {
         var fieldToUse = (fieldSelector.currentText && fieldSelector.currentText !== tr("Select a field")) ? fieldSelector.currentText : savedFieldName
         if (!selectedLayer || !fieldToUse || !valueField.text) return
         if (allowFormOpen === undefined) allowFormOpen = true
@@ -933,12 +995,18 @@ Item {
             selectedLayer.subsetString = showAllFeatures ? "" : expr
             selectedLayer.removeSelection()
 
-            // On fait la sélection temporairement pour tout le monde (y compris les points)
-            mapCanvas.mapSettings.selectionColor = targetSelectedColor
-            selectedLayer.selectByExpression(expr)
+            if (colorize1Enabled) {
+                mapCanvas.mapSettings.selectionColor = targetSelectedColor
+                selectedLayer.selectByExpression(expr)
+            }
 
-            selectedLayer.triggerRepaint()
-            mapCanvas.refresh()
+            // Pour les couches de points, on ne rafraîchit pas tant que la sélection
+            // (créée juste au-dessus, éventuellement utile au calcul du zoom) n'a pas
+            // été retirée — sinon le jaune apparaît brièvement à l'écran avant nettoyage.
+            if (!sourceIsPoints) {
+                selectedLayer.triggerRepaint()
+                mapCanvas.refresh()
+            }
 
             if (showFeatureList && featureFormItem && selectedLayer === getLayerByName(savedLayerName)) {
                 pendingFormLayer = selectedLayer; pendingFormExpr = expr; openListTimer.restart()
@@ -947,9 +1015,9 @@ Item {
             var currentAutoZoom = (searchStack.currentIndex === 0) ? doAutoZoom : doAutoZoom2
             if (doZoom && currentAutoZoom) { useListOffset = true; isReturnAction = false; zoomTimer.start() }
             else if (sourceIsPoints && selectedLayer) {
-                // Si on ne zoome pas (ex: changement de checkbox), on retire tout de suite la sélection pour les points
                 selectedLayer.removeSelection()
                 selectedLayer.triggerRepaint()
+                mapCanvas.refresh()
             }
             filterActive = true
 
@@ -957,8 +1025,18 @@ Item {
         } catch(e) {}
     }
 
+    function applyFilter2(allowFormOpen, doZoom) {
+        if (!filter2Enabled) {
+            if (selectedLayer2) {
+                selectedLayer2.subsetString = ""
+                selectedLayer2.removeSelection()
+                selectedLayer2.triggerRepaint()
+                mapCanvas.refresh()
+            }
+            filterActive2 = false
+            return
+        }
 
-        function applyFilter2(allowFormOpen, doZoom) {
         var fieldToUse = (fieldSelector2.currentText && fieldSelector2.currentText !== tr("Select a field")) ? fieldSelector2.currentText : savedFieldName2
         if (!selectedLayer2 || !fieldToUse || !valueField2.text) return
         if (allowFormOpen === undefined) allowFormOpen = true
@@ -980,22 +1058,25 @@ Item {
             selectedLayer2.subsetString = showAllFeatures2 ? "" : expr
             selectedLayer2.removeSelection()
 
-            // On effectue la sélection temporaire (y compris pour les points) pour permettre le calcul du zoom
-            selectedLayer2.selectByExpression(expr)
+            if (colorize2Enabled) {
+                mapCanvas.mapSettings.selectionColor = targetSelectedColor
+                selectedLayer2.selectByExpression(expr)
+            }
 
-            selectedLayer2.triggerRepaint()
-            mapCanvas.refresh()
+            if (!sourceIsPoints2) {
+                selectedLayer2.triggerRepaint()
+                mapCanvas.refresh()
+            }
 
             if (showFeatureList2 && featureFormItem && selectedLayer2 === getLayerByName(savedLayerName2)) {
                 pendingFormLayer = selectedLayer2; pendingFormExpr = expr; openListTimer.restart()
             }
 
             if (doZoom && doAutoZoom2) { useListOffset = true; isReturnAction = false; zoomTimer.start() }
-
             else if (sourceIsPoints2 && selectedLayer2) {
-                // Si on ne zoome pas (ex: changement de checkbox), on retire tout de suite la sélection pour les points
                 selectedLayer2.removeSelection()
                 selectedLayer2.triggerRepaint()
+                mapCanvas.refresh()
             }
 
             filterActive2 = true
@@ -1003,7 +1084,6 @@ Item {
             if (!sourceIsPoints2) computeCentroidsTimer2.restart()
         } catch(e) {}
     }
-
 
     // === UI UTILS ===
     function updateLayers() {
@@ -1176,12 +1256,11 @@ Item {
         valueField2.isLoading = false
     }
 
-            function updateApplyState() {
+    function updateApplyState() {
         if (!applyButton) return;
         
         var hasLayer = selectedLayer !== null && layerSelector.currentText !== tr("Select a layer");
         var hasField = fieldSelector && fieldSelector.currentText && fieldSelector.currentText !== tr("Select a field");
-        // On vérifie le texte actuellement présent dans l'input (et NON la variable sauvegardée)
         var hasText = valueField && valueField.text && valueField.text.trim().length > 0;
 
         var isReady = hasLayer && hasField && hasText;
@@ -1195,7 +1274,6 @@ Item {
 
         var hasLayer = selectedLayer2 !== null && layerSelector2.currentText !== tr("Select a layer");
         var hasField = fieldSelector2 && fieldSelector2.currentText && fieldSelector2.currentText !== tr("Select a field");
-        // On vérifie le texte actuellement présent dans l'input (et NON la variable sauvegardée)
         var hasText = valueField2 && valueField2.text && valueField2.text.trim().length > 0;
 
         var isReady = hasLayer && hasField && hasText;
@@ -1203,9 +1281,6 @@ Item {
         applyButton2.enabled = isReady;
         if (filterAndDriveButton2) filterAndDriveButton2.enabled = isReady;
     }
-
-
-
 
     function escapeValue(value) { return value.trim().replace(/'/g, "''") }
 
@@ -1217,13 +1292,21 @@ Item {
             "Filter 2": "Filtre 2",
             "Filter 1 deleted": "Filtre 1 supprimé",
             "Filter 2 deleted": "Filtre 2 supprimé",
-            "Filter 1 and 2 deleted": "Filtre 1 et 2 supprimés",
+            "Filters 1 and 2 deleted": "Filtres 1 et 2 supprimés",
             "Select a layer": "Sélectionnez une couche",
             "Select a field": "Sélectionnez un champ",
             "Filter value(s) (separate by ;) :": "Valeur(s) du filtre (séparer par ;) :",
             "Type to search (ex: Paris; Lyon)...": "Tapez pour rechercher (ex: Paris; Lyon)...",
             "Show all geometries (+filtered)": "Afficher toutes géométries (+filtrées)",
             "Show feature list": "Afficher liste des entités",
+            "Filter 1:\nACTIVE": "Filtre 1: \nACTIF",
+            "Filter 2:\nACTIVE": "Filtre 2:\nACTIF",
+            "Filter 1:\nINACTIVE": "Filtre 1:\nINACTIF",
+            "Filter 2:\nINACTIVE": "Filtre 2:\nINACTIF",
+            "Colorize\nFilter 1: ": "Colorier\nFiltre 1: ",
+            "Colorize\nFilter 2: ": "Colorier\nFiltre 2: ",
+            "YES": "OUI",
+            "NO": "NON",
             "Apply filter": "Appliquer le filtre",
             "Filter & Drive me": "Appliquer le filtre & Montre-moi la route",
             "Zoom to filtered geometries": "Zoomer sur les géométries filtrées",
@@ -1232,7 +1315,7 @@ Item {
         return isFr && dic[text] ? dic[text] : text
     }
 
-        // === CONNEXIONS UI ===
+    // === CONNEXIONS UI ===
     Connections {
         target: featureFormItem; ignoreUnknownSignals: true
         function onVisibleChanged() {
@@ -1243,7 +1326,6 @@ Item {
                 showFeatureList = false; 
                 showFeatureList2 = false
 
-                // --- AJOUT : Si la forme se ferme sur une couche de points, on annule le timer de zoom de retour ---
                 var isPoints = (searchStack.currentIndex === 1) ? sourceIsPoints2 : sourceIsPoints
                 if (isPoints) {
                     zoomTimer.stop()
@@ -1266,7 +1348,6 @@ Item {
         }
     }
 
-
     // === RENDERERS CONTOURS FILTRE 1 ===
     Repeater {
         id: outlineRenderers
@@ -1278,7 +1359,7 @@ Item {
             geometryWrapper.qgsGeometry: modelData.geom
             lineWidth: 2
             color: filterToolRoot.colorPalette[modelData.colorIdx]
-            opacity: filterToolRoot.filterActive && !filterToolRoot.sourceIsPoints ? 0.75 : 0.0
+            opacity: filterToolRoot.filterActive && filterToolRoot.filter1Enabled && filterToolRoot.colorize1Enabled && !filterToolRoot.sourceIsPoints ? 0.75 : 0.0
         }
     }
 
@@ -1293,7 +1374,7 @@ Item {
             geometryWrapper.qgsGeometry: modelData.geom
             lineWidth: 2
             color: filterToolRoot.colorPalette2[modelData.colorIdx]
-            opacity: filterToolRoot.filterActive2 && !filterToolRoot.sourceIsPoints2 ? 0.75 : 0.0
+            opacity: filterToolRoot.filterActive2 && filterToolRoot.filter2Enabled && filterToolRoot.colorize2Enabled && !filterToolRoot.sourceIsPoints2 ? 0.75 : 0.0
         }
     }
 
@@ -1301,9 +1382,9 @@ Item {
         target: mapCanvas ? mapCanvas.mapSettings : null
         ignoreUnknownSignals: true
         function onExtentChanged() {
-            if (filterToolRoot.filterActive && !filterToolRoot.sourceIsPoints && filterToolRoot.centroidPoints.length > 0)
+            if (filterToolRoot.filterActive && filterToolRoot.filter1Enabled && !filterToolRoot.sourceIsPoints && filterToolRoot.centroidPoints.length > 0)
                 filterToolRoot.buildClusters()
-            if (filterToolRoot.filterActive2 && !filterToolRoot.sourceIsPoints2 && filterToolRoot.centroidPoints2.length > 0)
+            if (filterToolRoot.filterActive2 && filterToolRoot.filter2Enabled && !filterToolRoot.sourceIsPoints2 && filterToolRoot.centroidPoints2.length > 0)
                 filterToolRoot.buildClusters2()
         }
     }
@@ -1336,7 +1417,7 @@ Item {
                 color: filterToolRoot.colorPalette[modelData.colorIdx]
                 border.color: modelData.clusterCount > 1 ? "yellow" : "white"
                 border.width: modelData.clusterCount > 1 ? 2 : 1.5
-                visible: filterToolRoot.filterActive && !filterToolRoot.sourceIsPoints
+                visible: filterToolRoot.filterActive && filterToolRoot.filter1Enabled && filterToolRoot.colorize1Enabled && !filterToolRoot.sourceIsPoints
                 Text {
                     anchors.centerIn: parent
                     text: modelData.clusterCount > 1 ? modelData.clusterCount : ""
@@ -1375,7 +1456,7 @@ Item {
                 color: filterToolRoot.colorPalette2[modelData.colorIdx]
                 border.color: modelData.clusterCount > 1 ? "yellow" : "white"
                 border.width: modelData.clusterCount > 1 ? 2 : 1.5
-                visible: filterToolRoot.filterActive2 && !filterToolRoot.sourceIsPoints2
+                visible: filterToolRoot.filterActive2 && filterToolRoot.filter2Enabled && filterToolRoot.colorize2Enabled && !filterToolRoot.sourceIsPoints2
                 Text {
                     anchors.centerIn: parent
                     text: modelData.clusterCount > 1 ? modelData.clusterCount : ""
@@ -1419,7 +1500,6 @@ Item {
                 Layout.topMargin: 10
             }
 
-
             // --- BARRE D'ONGLETS ---
             TabBar {
                 id: searchBar
@@ -1427,51 +1507,155 @@ Item {
                 Layout.leftMargin: 4
                 Layout.rightMargin: 4
 
-
                 TabButton { 
-                id: btnFilter1
-                        text: tr("Filter 1")
-                        contentItem: Text {
-                            text: btnFilter1.text
-                            font.pixelSize: 14
-                            font.bold: btnFilter1.checked
-                            color: btnFilter1.checked ? Theme.mainColor : "#555"
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignVCenter
-                        }
-                        background: Rectangle {
-                            implicitHeight: 45
-                            color: btnFilter1.checked ? "#f0f9f0" : "#f8f8f8"  // "#fdfdfd" : "#eeeeee"
-                            border.color: btnFilter1.checked ? Theme.mainColor : "transparent"
-                            border.width: btnFilter1.checked ? 2 : 0
-                            radius: 6
-                        }
+                    id: btnFilter1
+                    text: tr("Filter 1")
+                    contentItem: Text {
+                        text: btnFilter1.text
+                        font.pixelSize: 14
+                        font.bold: btnFilter1.checked
+                        color: btnFilter1.checked ? Theme.mainColor : "#555"
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    background: Rectangle {
+                        implicitHeight: 45
+                        color: btnFilter1.checked ? "#f0f9f0" : "#f8f8f8"
+                        border.color: btnFilter1.checked ? Theme.mainColor : "transparent"
+                        border.width: btnFilter1.checked ? 2 : 0
+                        radius: 6
+                    }
                 }
 
-
                 TabButton { 
+                    id: btnFilter2
+                    text: tr("Filter 2")
+                    contentItem: Text {
+                        text: btnFilter2.text
+                        font.pixelSize: 14
+                        font.bold: btnFilter2.checked
+                        color: btnFilter2.checked ? Theme.mainColor : "#555"
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    background: Rectangle {
+                        implicitHeight: 45
+                        color: btnFilter2.checked ? "#f0f9f0" : "#f8f8f8"
+                        border.color: btnFilter2.checked ? Theme.mainColor : "transparent"
+                        border.width: btnFilter2.checked ? 2 : 0
+                        radius: 6 
+                    }
+                }
+            } 
 
-                id: btnFilter2
-                        text: tr("Filter 2")
-                        contentItem: Text {
-                            text: btnFilter2.text
-                            font.pixelSize: 14
-                            font.bold: btnFilter2.checked
-                            color: btnFilter2.checked ? Theme.mainColor : "#555"
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignVCenter
+            // --- SWITCH D'ACTIVATION DU FILTRE ACTIF — fixe sous les onglets,
+            // hors du ScrollView pour ne jamais défiler avec le contenu ---
+            // Filtre 1 : texte + switch alignés à gauche
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.leftMargin: 20
+                Layout.rightMargin: 20
+                visible: searchBar.currentIndex === 0
+
+                Label {
+                    text: filter1Enabled ? tr("Filter 1:\nACTIVE") : tr("Filter 1:\nINACTIVE")
+                    font.bold: true
+                }
+                Switch {
+                    id: filter1Switch
+                    checked: filter1Enabled
+                    onToggled: {
+                        filter1Enabled = checked
+                        if (checked) {
+                            if (savedLayerName && layerSelector.find(savedLayerName) !== -1) {
+                                layerSelector.currentIndex = layerSelector.find(savedLayerName)
+                            }
+                            if (savedFieldName && fieldSelector.find(savedFieldName) !== -1) {
+                                fieldSelector.currentIndex = fieldSelector.find(savedFieldName)
+                            }
                         }
-                        background: Rectangle {
-                            implicitHeight: 45
-                            color: btnFilter2.checked ? "#f0f9f0" : "#f8f8f8"  // "#fdfdfd" : "#eeeeee"
-                            border.color: btnFilter2.checked ? Theme.mainColor : "transparent"
-                            border.width: btnFilter2.checked ? 2 : 0
-                            radius: 6 
-
-                 }
-
+                        applyFilter(true, false)
+                    }
+                }
+                Label {
+                    text: tr("Colorize\nFilter 1: ") + (colorize1Enabled ? tr("YES") : tr("NO"))
+                    font.bold: true
+                    Layout.leftMargin: 15
+                }
+                Switch {
+                    id: colorize1Switch
+                    checked: colorize1Enabled
+                    onToggled: {
+                        colorize1Enabled = checked
+                        if (filterActive && selectedLayer) {
+                            if (checked) {
+                                mapCanvas.mapSettings.selectionColor = targetSelectedColor
+                                // Pas de sélection sur couche de points : rien ne dépend
+                                // de cette sélection ici (pas de contour/centroïde coloré
+                                // pour les points), donc on ne recrée jamais de jaune visible
+                                if (savedExpr && !sourceIsPoints) selectedLayer.selectByExpression(savedExpr)
+                            } else {
+                                selectedLayer.removeSelection()
+                            }
+                            selectedLayer.triggerRepaint()
+                            mapCanvas.refresh()
+                        }
+                    }
+                }
+                Item { Layout.fillWidth: true }
             }
-} 
+
+            // Filtre 2 : texte + switch alignés à droite
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.leftMargin: 20
+                Layout.rightMargin: 20
+                visible: searchBar.currentIndex === 1
+
+                Item { Layout.fillWidth: true }
+                Label {
+                    text: filter2Enabled ? tr("Filter 2:\nACTIVE") : tr("Filter 2:\nINACTIVE")
+                    font.bold: true
+                }
+                Switch {
+                    id: filter2Switch
+                    checked: filter2Enabled
+                    onToggled: {
+                        filter2Enabled = checked
+                        if (checked) {
+                            if (savedLayerName2 && layerSelector2.find(savedLayerName2) !== -1) {
+                                layerSelector2.currentIndex = layerSelector2.find(savedLayerName2)
+                            }
+                            if (savedFieldName2 && fieldSelector2.find(savedFieldName2) !== -1) {
+                                fieldSelector2.currentIndex = fieldSelector2.find(savedFieldName2)
+                            }
+                        }
+                        applyFilter2(true, false)
+                    }
+                }
+                Label {
+                    text: tr("Colorize\nFilter 2: ") + (colorize2Enabled ? tr("YES") : tr("NO"))
+                    font.bold: true
+                    Layout.leftMargin: 15
+                }
+                Switch {
+                    id: colorize2Switch
+                    checked: colorize2Enabled
+                    onToggled: {
+                        colorize2Enabled = checked
+                        if (filterActive2 && selectedLayer2) {
+                            if (checked) {
+                                mapCanvas.mapSettings.selectionColor = targetSelectedColor
+                                if (savedExpr2 && !sourceIsPoints2) selectedLayer2.selectByExpression(savedExpr2)
+                            } else {
+                                selectedLayer2.removeSelection()
+                            }
+                            selectedLayer2.triggerRepaint()
+                            mapCanvas.refresh()
+                        }
+                    }
+                }
+            }
 
             // --- CONTENU DES ONGLETS ---
             StackLayout {
@@ -1480,7 +1664,7 @@ Item {
                 Layout.fillHeight: true
                 currentIndex: searchBar.currentIndex
 
-// ================ ONGLET 1 ====================
+                // ================ ONGLET 1 ====================
                 ScrollView {
                     id: scrollView1
                     Layout.fillWidth: true
@@ -1492,7 +1676,6 @@ Item {
                     bottomPadding: 10
                     leftPadding: 20
                     rightPadding: 20
-
 
                     ColumnLayout {
                         width: scrollView1.availableWidth
@@ -1585,7 +1768,7 @@ Item {
                     }
                 }
 
-// =============== ONGLET 2 ====================
+                // =============== ONGLET 2 ====================
                 ScrollView {
                     id: scrollView2
                     Layout.fillWidth: true
@@ -1597,7 +1780,6 @@ Item {
                     bottomPadding: 10
                     leftPadding: 20
                     rightPadding: 20
-
 
                     ColumnLayout {
                         width: scrollView2.availableWidth
@@ -1677,8 +1859,6 @@ Item {
                             }
                         }
 
-
-                             // === AJOUT DU BOUTON FILTER & DRIVE ME POUR LE FILTRE 2 ===
                         Button {
                             id: filterAndDriveButton2; text: tr("Filter & Drive me"); enabled: false; Layout.fillWidth: true
                             background: Rectangle { radius: 10; color: enabled ? "#80cc28" : "#e0e0e0" }
@@ -1689,9 +1869,6 @@ Item {
                                 searchDialog.close()
                             }
                         }
-
-
-
                     }
                 }
             }
